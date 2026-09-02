@@ -1,9 +1,7 @@
 # ---------------------------------------------------------------------------
 # Dados. Nao entram no git: sao publicos, grandes e reconstrutiveis.
 # Use  python preparar_dados.py  para baixar e preparar tudo.
-# ---------------------------------------------------------------------------
-
-# Oxford Battery Degradation Dataset (266 MB — acima do limite de 100 MB do GitHub)
+# Arquivos .mat (os originais da NASA, baixados para dados_brutos/ na preparacao)
 *.mat
 
 # NASA Li-ion Battery Aging Dataset, versao limpa (586 MB em 7.575 arquivos)
@@ -14,8 +12,11 @@ dados_brutos/
 *.zip
 
 # ---------------------------------------------------------------------------
-# Saida gerada — o converter_oxford_mat.py reconstroi tudo em ~1 min
+# Saida gerada pelos scripts de analise (graficos_nasa.py a refaz em ~1 min)
 # ---------------------------------------------------------------------------
+saida_nasa/
+
+# Sobra da fase anterior do projeto (Oxford), fora do escopo atual
 saida_oxford/
 
 # ---------------------------------------------------------------------------

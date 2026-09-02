@@ -1,19 +1,13 @@
 # Project_SOH_for_eletric_batteries
 
-Estimativa de estado de saúde (SoH) de baterias de íon-lítio a partir de dois
-conjuntos públicos de dados de envelhecimento: o **Oxford Battery Degradation
-Dataset 1** e o **NASA Li-ion Battery Aging Dataset**.
+Estimativa de estado de saúde (SoH) de baterias de íon-lítio a partir do **NASA
+Li-ion Battery Aging Dataset**: 34 células, 7.565 ensaios de carga, descarga e
+espectroscopia de impedância.
 
 ## Os dados não estão no repositório
 
-São 1,6 GB de dados públicos. O repositório guarda o código que os obtém e os
-prepara — não os dados em si:
-
-| | tamanho | por quê não versionar |
-|---|---|---|
-| `Oxford_..._Dataset_1.mat` | 266 MB | acima do limite de 100 MB por arquivo do GitHub |
-| `cleaned_nasa_dataset/` | 586 MB em 7.575 arquivos | público, e reconstruível bit a bit |
-| `saida_oxford/` | 833 MB | saída gerada; o conversor a refaz em ~1 min |
+São 586 MB em 7.575 arquivos, públicos e reconstruíveis bit a bit. O repositório
+guarda o código que os obtém e os prepara — não os dados.
 
 ## Como começar
 
@@ -27,71 +21,84 @@ venv\Scripts\Activate.ps1
 
 python -m pip install -r requirements.txt
 
-python preparar_dados.py        # baixa e prepara os dois datasets (~10 min)
-python converter_oxford_mat.py  # gera saida_oxford/ (planilha, CSVs e gráficos)
+python preparar_dados.py    # baixa da NASA e reconstrói (~5 min)
+python graficos_nasa.py     # gera saida_nasa/ com métricas e gráficos (~1 min)
 ```
 
 ## `preparar_dados.py`
 
 ```bash
-python preparar_dados.py              # os dois datasets
-python preparar_dados.py --oxford     # só o .mat do Oxford
-python preparar_dados.py --nasa       # só os CSVs limpos da NASA
-python preparar_dados.py --verificar  # não baixa nada; confere o que já existe
-python preparar_dados.py --forcar     # refaz mesmo se já estiver na pasta
-
+python preparar_dados.py                     # baixa e prepara
+python preparar_dados.py --verificar         # não baixa; confere o que já existe
 python preparar_dados.py --gerar-manifesto   # (re)cria o manifesto de verificação
+python preparar_dados.py --forcar            # refaz mesmo se já estiver na pasta
 ```
 
 O download é retomável: se cair no meio, rode de novo.
 
-### O NASA é reconstruído, não baixado pronto
+### Os CSVs são reconstruídos, não baixados prontos
 
-O script baixa os 34 arquivos `.mat` originais da NASA e refaz a limpeza —
-um CSV por ensaio, mais `metadata.csv` e `extra_infos/`. O resultado é
-**idêntico byte a byte** ao dataset limpo usado no projeto, e o script prova
-isso a cada execução conferindo os 7.575 arquivos contra
-`manifesto_nasa.csv.gz` (337 KB, versionado).
+O script baixa os 34 arquivos `.mat` originais da NASA e refaz a limpeza — um
+CSV por ensaio, mais `metadata.csv` e `extra_infos/`. O resultado é **idêntico
+byte a byte** ao dataset limpo usado no projeto, e o script prova isso a cada
+execução conferindo os 7.575 arquivos contra `manifesto_nasa.csv.gz`.
 
-Esse manifesto é a única parte dos dados que fica no repositório: uma tabela com
-o caminho, o tamanho e o `sha256` de cada um dos 7.575 arquivos. Ele não contém
-dado nenhum — só as impressões digitais, que cabem em 337 KB no lugar de 586 MB.
-Serve para responder "os dados que eu tenho são mesmo os certos?" sem precisar
-guardar os dados. **Se ele não estiver no repositório, a verificação não roda** e
-o script avisa; para recriá-lo a partir de dados recém-baixados da fonte oficial,
-use `--gerar-manifesto`.
+Esse manifesto é a única parte dos dados que fica versionada: uma tabela com o
+caminho, o tamanho e o `sha256` de cada arquivo. Não contém dado nenhum — só as
+impressões digitais, em 337 KB no lugar de 586 MB. **Sem ele a verificação não
+roda**, e o script avisa em vez de fingir que passou.
 
-Três detalhes do dado original que a reconstrução precisa respeitar, e que
-valem como aviso para quem for analisar:
-
-- **18 dos 4.080 valores de `Re`/`Rct` são complexos**, com parte imaginária de
-  até 0,039 — comparável ao próprio valor. Tratar a coluna como float perde
-  informação real.
-- **19 dos 2.794 `Capacity` são inteiro zero**, e não 0.0: são medições que
-  falharam, não capacidade nula medida.
-- **25 `Capacity` são `[]`** (array vazio), diferente de célula em branco — o
-  ensaio existiu mas não produziu o valor.
-
-A ordem das baterias que define a numeração `uid` é arbitrária (herdada da
-listagem de diretório de quem fez a limpeza original). Ela está registrada em
+A ordem das baterias que define a numeração `uid` é arbitrária, herdada da
+listagem de diretório de quem fez a limpeza original. Está registrada em
 `ORDEM_BATERIAS`, dentro do script: 34 nomes no lugar de 586 MB.
 
-## `converter_oxford_mat.py`
+## `graficos_nasa.py`
 
-Converte o `.mat` do Oxford em planilha Excel, CSVs e gráficos, com controle de
-qualidade das medições. Documentação completa em [COMO_USAR.md](COMO_USAR.md).
+Gera `saida_nasa/` com três tabelas de métricas e sete gráficos:
 
-## Fontes e licenças
+| | |
+|---|---|
+| `metricas_descargas.csv` | uma linha por descarga: condição, capacidade, SoH, duração, tensão final, temperatura máxima |
+| `metricas_impedancia.csv` | uma linha por ensaio de impedância: Re, Rct, SoH da descarga mais próxima |
+| `resumo_baterias.csv` | uma linha por bateria, incluindo a correlação entre resistência e SoH |
+| `graficos/01…07` | capacidade por condição, SoH, efeito da condição, resistência, predição de SoH, curvas de descarga, espectro |
 
-| dataset | fonte | licença |
-|---|---|---|
-| Oxford Battery Degradation Dataset 1 | [ORA, DOI 10.5287/bodleian:KO2kdmYGg](https://ora.ox.ac.uk/objects/uuid:03ba4b01-cfed-46d3-9b1a-7d4a7bdf6fac) | ODC Open Database License (ODbL) |
-| NASA Li-ion Battery Aging Dataset | [NASA PCoE Data Repository](https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/) | domínio público (obra do governo dos EUA) |
+## O que os dados exigem cuidado
 
-Citações:
+**A capacidade só é comparável dentro da mesma condição de ensaio.** A mesma
+célula a 4 A entrega 1,42 Ah a 24 °C e **0,06 Ah a 4 °C** — 23 vezes menos. São
+11 combinações de corrente × temperatura no dataset, e 9 das 34 baterias mudam
+de condição no meio da vida. Plotar capacidade contra ciclo sem separar por
+condição produz um degrau que parece morte súbita e é troca de protocolo. Por
+isso o SoH aqui é normalizado pela capacidade máxima da bateria **naquela
+condição**, e o eixo x conta ciclos dentro da condição.
 
-> Howey, D., & Birkl, C. (2017). *Oxford Battery Degradation Dataset 1*.
-> University of Oxford.
+**Normalizar pelo primeiro ciclo não funciona neste dataset.** Várias baterias
+começam com uma descarga que não mede a capacidade cheia, o que produziria SoH
+de até 1.900%.
+
+**A impedância prevê o SoH, mas só dentro da mesma célula.** Juntando as 34, a
+correlação entre `Re` e SoH é de apenas −0,17. Nas três células com histórico
+longo, tomadas uma a uma, é de **−0,87 a −0,95**. Cada célula tem seu próprio
+nível de resistência, então um modelo de SoH por impedância precisa de
+calibração por célula.
+
+**Ruído que precisa ser filtrado:**
+
+- **14 dos 1.956** ensaios de impedância têm `Re`/`Rct` fisicamente impossíveis,
+  chegando a 10¹⁵ Ω (a mediana é 0,07 Ω). Concentram-se em B0050 e B0052.
+- **44 descargas** têm capacidade ausente ou exatamente zero.
+- **18 dos 4.080** valores de `Re`/`Rct` são complexos, com parte imaginária de
+  até 0,039 — comparável ao próprio valor. Ler a coluna como float perde
+  informação real.
+- **19 `Capacity` são inteiro `0`** (medição que falhou), e **25 são `[]`**
+  (array vazio) — diferente de célula em branco.
+
+As marcações ficam na coluna `alerta` das tabelas de métricas. Nada é apagado.
+
+## Fonte e licença
+
+[NASA PCoE Data Repository](https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/) — domínio público (obra do governo dos EUA).
 
 > Saha, B., & Goebel, K. (2007). *Battery Data Set*. NASA Ames Prognostics Data
 > Repository, NASA Ames Research Center.

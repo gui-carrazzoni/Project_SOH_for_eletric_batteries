@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Baixa e prepara os dois datasets do projeto. Nenhum dado fica versionado no
-repositorio: este script reconstroi tudo a partir das fontes oficiais.
+Baixa e prepara o dataset NASA. Nenhum dado fica versionado no repositorio:
+este script reconstroi tudo a partir da fonte oficial.
 
-    python preparar_dados.py              # baixa e prepara os dois
-    python preparar_dados.py --oxford     # so o Oxford (.mat)
-    python preparar_dados.py --nasa       # so o NASA (CSVs limpos)
-    python preparar_dados.py --verificar  # so confere o que ja esta na pasta
+    python preparar_dados.py                     # baixa e prepara
+    python preparar_dados.py --verificar         # so confere o que ja esta la
+    python preparar_dados.py --gerar-manifesto   # (re)cria o manifesto
 
-O NASA e reconstruido a partir dos arquivos .mat originais da NASA e sai
-identico byte a byte ao dataset limpo usado no projeto — a conferencia contra
+Os CSVs sao reconstruidos a partir dos .mat originais da NASA e saem identicos
+byte a byte ao dataset limpo usado no projeto — a conferencia contra
 manifesto_nasa.csv.gz prova isso a cada execucao.
 
 Dependencias: numpy, scipy, pandas  (python -m pip install -r requirements.txt)
@@ -21,6 +20,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import io
 import os
 import shutil
 import sys
@@ -33,20 +33,8 @@ from urllib.request import Request, urlopen
 RAIZ = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
-# Fontes oficiais
+# Fonte oficial
 # ---------------------------------------------------------------------------
-OXFORD = {
-    "nome": "Oxford_Battery_Degradation_Dataset_1.mat",
-    # Oxford Research Archive, DOI 10.5287/bodleian:KO2kdmYGg
-    "url": "https://ora.ox.ac.uk/objects/uuid:03ba4b01-cfed-46d3-9b1a-7d4a7bdf6fac"
-           "/files/m5ac36a1e2073852e4f1f7dee647909a7",
-    "pagina": "https://ora.ox.ac.uk/objects/uuid:03ba4b01-cfed-46d3-9b1a-7d4a7bdf6fac",
-    "licenca": "ODC Open Database License (ODbL)",
-    "citacao": "Howey, D., & Birkl, C. (2017). Oxford Battery Degradation "
-               "Dataset 1. University of Oxford.",
-    "mb": 266,
-}
-
 NASA = {
     "nome": "5. Battery Data Set.zip",
     # Espelho oficial do NASA Prognostics Center of Excellence (PCoE)
@@ -136,7 +124,7 @@ def baixar(url: str, destino: Path, esperado_mb: int) -> Path:
             if ja:
                 if resposta.status == 206:
                     p(f"  retomando de {humano(ja)}...")
-                else:   # servidor ignorou o Range (o ORA e um deles)
+                else:   # servidor ignorou o Range
                     p(f"  o servidor nao aceita retomada; recomecando do zero...")
                     ja = 0
             total = resposta.headers.get("Content-Length")
@@ -166,26 +154,6 @@ def baixar(url: str, destino: Path, esperado_mb: int) -> Path:
 
     parcial.replace(destino)
     return destino
-
-
-# ---------------------------------------------------------------------------
-# Oxford
-# ---------------------------------------------------------------------------
-def preparar_oxford(forcar: bool) -> None:
-    destino = RAIZ / OXFORD["nome"]
-    p("=" * 70)
-    p("Oxford Battery Degradation Dataset 1")
-    p("=" * 70)
-    if destino.exists() and not forcar:
-        p(f"  ja existe: {destino.name} ({humano(destino.stat().st_size)}) — pulando")
-        p(f"  (use --forcar para baixar de novo)")
-        return
-    p(f"  fonte  : {OXFORD['pagina']}")
-    p(f"  licenca: {OXFORD['licenca']}")
-    p(f"  baixando ~{OXFORD['mb']} MB...")
-    baixar(OXFORD["url"], destino, OXFORD["mb"])
-    p(f"  pronto: {destino.name} ({humano(destino.stat().st_size)})")
-    p(f"  agora rode: python converter_oxford_mat.py")
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +354,16 @@ def gerar_manifesto() -> None:
             linhas.append((rel, caminho.stat().st_size, sha256(caminho)))
     linhas.sort()
 
-    with gzip.open(MANIFESTO, "wt", newline="", encoding="utf-8") as fh:
-        escritor = csv.writer(fh)
-        escritor.writerow(["arquivo", "bytes", "sha256"])
-        escritor.writerows(linhas)
+    antes = MANIFESTO.read_bytes() if MANIFESTO.exists() else None
+
+    # mtime=0: por padrao o gzip grava a hora da compressao no cabecalho, entao
+    # o arquivo mudaria de bytes a cada geracao mesmo com conteudo identico e o
+    # git o marcaria como modificado sem que nada tivesse mudado.
+    with gzip.GzipFile(MANIFESTO, "wb", compresslevel=9, mtime=0) as bruto:
+        with io.TextIOWrapper(bruto, encoding="utf-8", newline="") as fh:
+            escritor = csv.writer(fh)
+            escritor.writerow(["arquivo", "bytes", "sha256"])
+            escritor.writerows(linhas)
 
     total = sum(linha[1] for linha in linhas)
     resumo = hashlib.sha256(
@@ -398,9 +372,17 @@ def gerar_manifesto() -> None:
     p(f"  {MANIFESTO.name} ({humano(MANIFESTO.stat().st_size)})")
     p(f"  sha256 do conjunto: {resumo}")
     p("")
-    p("  Comite este arquivo — e ele que permite provar, em qualquer maquina,")
-    p("  que os dados reconstruidos sao os mesmos:")
-    p(f"      git add {MANIFESTO.name} && git commit -m 'Adiciona manifesto do dataset NASA'")
+    if antes is None:
+        p("  Este arquivo precisa ser versionado — e ele que permite provar, em")
+        p("  qualquer maquina, que os dados reconstruidos sao os mesmos:")
+        p(f"      git add {MANIFESTO.name}")
+    elif antes == MANIFESTO.read_bytes():
+        p("  Identico ao manifesto que ja estava aqui: nada a commitar.")
+    else:
+        p("  ATENCAO: o manifesto MUDOU em relacao ao que estava aqui.")
+        p("  Ou os dados sao outros, ou o anterior estava errado. Confira o que")
+        p("  mudou antes de commitar:")
+        p(f"      git diff --stat {MANIFESTO.name}")
 
 
 def verificar_nasa() -> bool:
@@ -462,31 +444,12 @@ def verificar_nasa() -> bool:
     return bom
 
 
-def verificar_oxford() -> bool:
-    caminho = RAIZ / OXFORD["nome"]
-    p("=" * 70)
-    p("Verificacao do arquivo Oxford")
-    p("=" * 70)
-    if not caminho.exists():
-        p(f"  {OXFORD['nome']} nao existe. Rode: python preparar_dados.py --oxford")
-        return False
-    tam = caminho.stat().st_size
-    with open(caminho, "rb") as fh:
-        cabecalho = fh.read(64)
-    v5 = b"MATLAB 5.0 MAT-file" in cabecalho
-    p(f"  {OXFORD['nome']}: {humano(tam)}, formato "
-      f"{'MAT-file v5 (ok)' if v5 else 'NAO reconhecido'}")
-    return v5
-
-
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="Baixa e prepara os datasets do projeto a partir das fontes oficiais.",
+        description="Baixa e prepara o dataset NASA a partir da fonte oficial.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Sem argumentos, prepara os dois datasets.")
-    ap.add_argument("--oxford", action="store_true", help="so o dataset Oxford (.mat)")
-    ap.add_argument("--nasa", action="store_true", help="so o dataset NASA (CSVs limpos)")
+        epilog="Sem argumentos, baixa e prepara o dataset.")
     ap.add_argument("--verificar", action="store_true",
                     help="nao baixa nada; so confere o que ja esta na pasta")
     ap.add_argument("--gerar-manifesto", action="store_true",
@@ -502,20 +465,12 @@ def main():
         sys.exit(0)
 
     if args.verificar:
-        bom = verificar_oxford()
-        bom = verificar_nasa() and bom
-        sys.exit(0 if bom else 1)
+        sys.exit(0 if verificar_nasa() else 1)
 
-    dois = not (args.oxford or args.nasa)
-    mods = checar_dependencias() if (args.nasa or dois) else None
-
-    if args.oxford or dois:
-        preparar_oxford(args.forcar)
-        p("")
-    if args.nasa or dois:
-        preparar_nasa(mods, args.forcar, args.manter_zip)
-        p("")
-        verificar_nasa()
+    mods = checar_dependencias()
+    preparar_nasa(mods, args.forcar, args.manter_zip)
+    p("")
+    verificar_nasa()
 
     p("Concluido.")
 
