@@ -39,6 +39,8 @@ python preparar_dados.py --oxford     # só o .mat do Oxford
 python preparar_dados.py --nasa       # só os CSVs limpos da NASA
 python preparar_dados.py --verificar  # não baixa nada; confere o que já existe
 python preparar_dados.py --forcar     # refaz mesmo se já estiver na pasta
+
+python preparar_dados.py --gerar-manifesto   # (re)cria o manifesto de verificação
 ```
 
 O download é retomável: se cair no meio, rode de novo.
@@ -50,6 +52,14 @@ um CSV por ensaio, mais `metadata.csv` e `extra_infos/`. O resultado é
 **idêntico byte a byte** ao dataset limpo usado no projeto, e o script prova
 isso a cada execução conferindo os 7.575 arquivos contra
 `manifesto_nasa.csv.gz` (337 KB, versionado).
+
+Esse manifesto é a única parte dos dados que fica no repositório: uma tabela com
+o caminho, o tamanho e o `sha256` de cada um dos 7.575 arquivos. Ele não contém
+dado nenhum — só as impressões digitais, que cabem em 337 KB no lugar de 586 MB.
+Serve para responder "os dados que eu tenho são mesmo os certos?" sem precisar
+guardar os dados. **Se ele não estiver no repositório, a verificação não roda** e
+o script avisa; para recriá-lo a partir de dados recém-baixados da fonte oficial,
+use `--gerar-manifesto`.
 
 Três detalhes do dado original que a reconstrução precisa respeitar, e que
 valem como aviso para quem for analisar:

@@ -369,14 +369,53 @@ def sha256(caminho: Path) -> str:
     return h.hexdigest()
 
 
+def gerar_manifesto() -> None:
+    """Grava o sha256 e o tamanho de cada arquivo do dataset NASA."""
+    p("=" * 70)
+    p("Gerando manifesto")
+    p("=" * 70)
+    if not DESTINO_NASA.exists():
+        p(f"  {DESTINO_NASA.name}/ nao existe. Rode antes: python preparar_dados.py --nasa")
+        sys.exit(1)
+
+    linhas = []
+    for dirpath, _, arquivos in os.walk(DESTINO_NASA):
+        for a in arquivos:
+            caminho = Path(dirpath) / a
+            rel = os.path.relpath(caminho, DESTINO_NASA).replace(os.sep, "/")
+            linhas.append((rel, caminho.stat().st_size, sha256(caminho)))
+    linhas.sort()
+
+    with gzip.open(MANIFESTO, "wt", newline="", encoding="utf-8") as fh:
+        escritor = csv.writer(fh)
+        escritor.writerow(["arquivo", "bytes", "sha256"])
+        escritor.writerows(linhas)
+
+    total = sum(linha[1] for linha in linhas)
+    resumo = hashlib.sha256(
+        "\n".join(f"{a} {b} {c}" for a, b, c in linhas).encode()).hexdigest()
+    p(f"  {len(linhas)} arquivos, {humano(total)}")
+    p(f"  {MANIFESTO.name} ({humano(MANIFESTO.stat().st_size)})")
+    p(f"  sha256 do conjunto: {resumo}")
+    p("")
+    p("  Comite este arquivo — e ele que permite provar, em qualquer maquina,")
+    p("  que os dados reconstruidos sao os mesmos:")
+    p(f"      git add {MANIFESTO.name} && git commit -m 'Adiciona manifesto do dataset NASA'")
+
+
 def verificar_nasa() -> bool:
     """Confere a pasta contra manifesto_nasa.csv.gz, arquivo por arquivo."""
     p("=" * 70)
     p("Verificacao do dataset NASA")
     p("=" * 70)
     if not MANIFESTO.exists():
-        p(f"  {MANIFESTO.name} nao encontrado — nada a verificar.")
-        return True
+        p(f"  {MANIFESTO.name} nao esta no repositorio, entao NAO foi possivel")
+        p("  conferir se os dados reconstruidos estao corretos.")
+        p("")
+        p("  Para criar o manifesto a partir do que acabou de ser gerado:")
+        p("      python preparar_dados.py --gerar-manifesto")
+        p("  (so faca isso a partir de dados recem-baixados da fonte oficial)")
+        return False
     if not DESTINO_NASA.exists():
         p(f"  {DESTINO_NASA.name}/ nao existe. Rode: python preparar_dados.py --nasa")
         return False
@@ -450,11 +489,17 @@ def main():
     ap.add_argument("--nasa", action="store_true", help="so o dataset NASA (CSVs limpos)")
     ap.add_argument("--verificar", action="store_true",
                     help="nao baixa nada; so confere o que ja esta na pasta")
+    ap.add_argument("--gerar-manifesto", action="store_true",
+                    help="(re)cria manifesto_nasa.csv.gz a partir da pasta atual")
     ap.add_argument("--forcar", action="store_true",
                     help="refaz mesmo se os dados ja estiverem la")
     ap.add_argument("--manter-zip", action="store_true",
                     help="nao apaga o zip da NASA depois de extrair (~210 MB)")
     args = ap.parse_args()
+
+    if args.gerar_manifesto:
+        gerar_manifesto()
+        sys.exit(0)
 
     if args.verificar:
         bom = verificar_oxford()
