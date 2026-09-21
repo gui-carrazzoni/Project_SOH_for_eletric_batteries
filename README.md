@@ -24,7 +24,8 @@ python -m pip install -r requirements.txt
 python preparar_dados.py    # baixa da NASA e reconstrói (~5 min)
 python graficos_nasa.py     # gera saida_nasa/ com métricas e gráficos (~1 min)
 python correlacao_soh.py    # relevância dos atributos para o SoH (~10 s)
-python limpeza.py      # limpeza, faltantes e redundância (~2 s)
+python limpeza.py           # limpeza, faltantes e redundância (~2 s)
+python descritiva.py        # análise descritiva: distribuições e gráficos (~5 s)
 python normalizar.py        # divisão, referência de vida e escala (~3 s)
 ```
 
@@ -162,6 +163,45 @@ so e desenhado quando alguma coluna passa de 5% de ausencia.
 atrapalha arvore, entao a decisao pertence a quem escolhe o modelo;
 `pares_redundantes.csv` lista a sugestao e `--podar` aplica. A sugestao usa a
 correlacao **intra-celula** para decidir quem fica.
+
+## `descritiva.py`
+
+```bash
+python descritiva.py                # tabelas e graficos
+python descritiva.py --sem-graficos  # so as tabelas
+```
+
+Escreve `saida_nasa/descritiva/`: as estatisticas de um atributo numerico, a
+distribuicao de um nominal e tres figuras — histograma, boxplot e dispersao.
+E a materia da secao 3.3 do artigo.
+
+**O numerico e `SOH`**, porque e o alvo e porque o limiar de fim de vida (80%) e
+definido sobre ele. **O nominal e `test_condition`**, corrente x temperatura. Os
+outros dois candidatos perdem por motivos diferentes: `charge_type` e identico
+nas 34 celulas — variancia zero, nada a descrever — e `discharge_type` explica
+8,6% da variancia do SOH contra os 16,0% da condicao. `battery_id` explica 60,6%,
+mas e rotulo de instancia: nao existe para uma celula nova.
+
+| | |
+|---|---|
+| `estatisticas_numericas.csv` | tendencia central, dispersao e forma do SOH e da capacidade |
+| `frequencias_condicao.csv` | uma linha por condicao: descargas, celulas, quartis do SOH e as duas correlacoes com o ciclo |
+| `01_histograma_soh.png` | o SOH ao lado da capacidade bruta |
+| `02_boxplot_soh_condicao.png` | SOH por condicao, ordenado pela mediana |
+| `03_dispersao_soh_ciclo.png` | SOH contra ciclo, um painel por condicao |
+
+O histograma traz a capacidade bruta ao lado do alvo de proposito: ela e bimodal
+e ele nao. A moda junto de zero sao as 192 descargas a 4 A / 4 C, mediana de
+0,062 Ah contra 1,760 Ah a 1 A / 44 C — 28 vezes. Nenhuma degradacao faz isso; e
+protocolo, e e o argumento para o alvo ser relativo.
+
+A dispersao mostra o **paradoxo de Simpson** dentro de uma unica condicao. Em
+1 A / 4 C o SOH parece subir com o ciclo (r = +0,26); dentro de cada uma das oito
+celulas ele cai, com r mediano de −0,91. B0042, B0043 e B0044 entram nessa
+condicao ja no ciclo 87 e, renormalizadas pelo maximo do novo grupo, reaparecem
+em 100% — trajetorias decrescentes empilhadas no canto alto, sobre as quais a
+reta agregada sobe. Nos 43 grupos o r mediano e −0,82, negativo em 37; agrupando
+tudo, −0,42.
 
 ## `normalizar.py`
 
