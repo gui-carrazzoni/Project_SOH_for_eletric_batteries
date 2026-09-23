@@ -58,7 +58,9 @@ import argparse
 import sys
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent
+# A raiz do projeto e a pasta acima de src/: e la que ficam
+# cleaned_nasa_dataset/ e saida_nasa/.
+RAIZ = Path(__file__).resolve().parent.parent
 ENTRADA = RAIZ / "saida_nasa" / "preprocessado" / "dados_modelagem.csv"
 SAIDA = RAIZ / "saida_nasa" / "normalizado"
 

@@ -30,7 +30,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-RAIZ = Path(__file__).resolve().parent
+# A raiz do projeto e a pasta acima de src/: e la que ficam
+# cleaned_nasa_dataset/ e saida_nasa/.
+RAIZ = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Fonte oficial
