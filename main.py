@@ -68,7 +68,7 @@ ETAPAS = [
     ("curvas", "curvas.py", [],
      "saida_nasa/curvas/features_curvas.csv", ["--remontar"],
      "areas sob a curva e forma da descarga"),
-    ("grupos", "grupos.py", ["--grupos", "5"],
+    ("grupos", "grupos.py", [],
      "saida_nasa/cluster/agrupamento/grupos_comportamento.csv", [],
      "agrupamento por comportamento medido"),
     ("capacidade", "capacidade.py", [],

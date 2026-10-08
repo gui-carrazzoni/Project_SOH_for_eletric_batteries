@@ -350,38 +350,63 @@ derivado dele, já estava numa base comparável entre cortes.
 ## `grupos.py`
 
 ```bash
-python src/grupos.py              # k pela silhueta
-python src/grupos.py --grupos 5   # força k
+python src/grupos.py              # k por silhueta + estabilidade
+python src/grupos.py --grupos 6   # força k
 ```
 
-Agrupamento hierárquico (Ward) das descargas por **comportamento medido**, para
-confrontar com o rótulo nominal de `test_condition`. Escreve
-`saida_nasa/cluster/agrupamento/`.
+Agrupamento hierárquico (Ward) por **comportamento medido**, para confrontar com
+o rótulo nominal de `test_condition`. Escreve `saida_nasa/cluster/agrupamento/`.
 
-A unidade agrupada é a bateria × condição, e só os ciclos de início de vida
-entram — com todos os ciclos, uma célula degradada num regime brando pareceria
-uma célula nova num regime severo, e o cluster mediria degradação em vez de
-regime. Corrente e temperatura ficam **fora** dos atributos de propósito: incluí-
-las faria o cluster reproduzir o rótulo nominal por construção.
+A unidade agrupada é a bateria × condição, descrita pela mediana dos 10
+primeiros ciclos naquele regime — com todos os ciclos, uma célula degradada num
+regime brando pareceria uma célula nova num regime severo. Corrente,
+temperatura **e tensão de corte** ficam fora dos atributos: incluí-las faria o
+cluster reproduzir o protocolo por construção.
 
-**O que ele encontrou foi a tensão de corte.** Em 4 das 6 condições nominais que
-o agrupamento partiu, a divisão segue exatamente o corte. O caso mais limpo é
-`2 A / 4 C`: oito células, mesmo protocolo nominal, todas do ciclo 0.
+**Tudo vem da janela comum de 2,7 V.** A versão anterior usava a curva até o
+corte de cada célula, e o último ponto dela (`v49`) *é* a tensão de corte
+(r = 0,98); `queda_V` também (r = −0,79). Com isso o cluster "descobria" o
+corte que recebia como atributo — em `2 A / 4 C` as oito células se partiam
+exatamente por corte. Na janela comum (`c00`..`c49` e as grandezas `_comum` de
+`curvas.py`) as oito caem no mesmo grupo, e o ARI contra o corte vai a ≈ 0.
 
-| células | corte | queda de tensão |
-|---|---|---|
-| B0049, B0050, B0053, B0054 | 2,0 e 2,2 V | 1,58 – 1,84 V |
-| B0051, B0052, B0055, B0056 | 2,5 e 2,7 V | 1,07 – 1,34 V |
+O pipeline:
 
-Sem sobreposição. `test_condition` é corrente × temperatura e **ignora um
-terceiro eixo de protocolo** que muda o comportamento de descarga.
+1. **Extremos à parte.** Escore-z modificado (mediana/MAD) > 3,5 no log das
+   áreas separa 5 pares — os quatro de `4 A / 4 C` e B0039 a `4 A / 24 C`, que
+   chegam a 2,7 V em menos de 7 min. Dentro do agrupamento eles inflavam a
+   silhueta e faziam ela escolher k=2.
+2. **Redundância fora.** `carga_Ah_comum` sai por r = 0,99 com
+   `energia_Wh_comum`; sem isso a mesma grandeza contaria duas vezes.
+3. **PCA** retém 95% da variância em 3 componentes (75%, 16%, 5%).
+4. **k por dois critérios.** Candidatos: estabilidade bootstrap (ARI médio,
+   200 reamostragens) ≥ 0,75 e nenhum grupo unitário. Vence o **menor**
+   candidato — a silhueta cresce quase sem parar com k e não tem pico, então o
+   máximo dela é fragmentação. Resultado: **k = 6**.
 
-Duas ressalvas honestas. A silhueta escolhe k=2, mas é patologia: `4 A / 4 C`
-entrega 0,062 Ah contra 1,7 das demais, e é tão distante que infla a silhueta de
-qualquer partição que o isole; k=5 é o último antes de fragmentar em grupos
-unitários. E `queda_V` está entre os atributos, sendo quase determinado pelo
-corte (r = −0,95) — o cluster em parte descobriu uma variável que lhe foi
-entregue.
+| k=6 | valor |
+|---|---|
+| silhueta | 0,48 |
+| estabilidade bootstrap | 0,80 ± 0,15 |
+| ARI Ward × k-means | 0,94 |
+| ARI contra a condição nominal | 0,49 (NMI 0,76) |
+| ARI contra a tensão de corte | −0,04 (NMI 0,08) |
+
+**O que ele encontrou de fato foi a carga pulsada.** B0025–B0027 estão rotuladas
+`4 A / 24 C`, mas descarregam em onda quadrada de 50% de duty — 2 A em média.
+O agrupamento, que nunca viu a corrente, as colocou junto das células de 2 A em
+temperatura ambiente, e não com as de 4 A contínuo (B0033, B0034). É o rótulo
+nominal escondendo um regime, agora sem vazamento. As outras fusões seguem a
+física: `2 A / 22 C`, `2 A / 24 C` e `2 A / 44 C` formam um grupo só (a
+temperatura entre 22 e 44 °C pouco muda a descarga a 2 A), enquanto 4 °C separa
+sempre.
+
+Ressalvas. B0039 a `4 A / 24 C` virou extremo com 1,34 Wh — muito abaixo das
+irmãs B0038 e B0040 (2,3 e 3,2 Wh), mas nove vezes acima de `4 A / 4 C`: o MAD
+das áreas é pequeno e o limiar de 3,5 o pega. E B0041 e B0045 (`1 A / 4 C`)
+ficam com `2 A / 4 C`, não com as outras de 1 A. Em B0041 há explicação: ela
+chega a `1 A / 4 C` depois de 42 ciclos a `4 A / 4 C`, já gasta. B0045 entra
+nova, e o agrupamento não explica por que ela destoa.
 
 ## `capacidade.py` e `modelos_area.py`
 

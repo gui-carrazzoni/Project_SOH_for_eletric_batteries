@@ -322,6 +322,38 @@ def desenhar(mods, d, freq):
                   "com o SOH renormalizado em 100%.")
     salvar(plt, fig, "03_dispersao_soh_ciclo.png")
 
+    # -- 04 a mesma dispersao, colorida por celula: mostra quem compoe cada nuvem
+    fig, axes = plt.subplots(2, 4, figsize=(13.0, 8.2), sharex=False, sharey=False)
+    for ax, cond in zip(axes.ravel(), ordem):
+        sub = d[d[NOMINAL] == cond]
+        # Maximo de 8 celulas por condicao, o que cabe na paleta sem repetir cor.
+        for i, (bat, cel) in enumerate(sub.groupby("battery_id", sort=True)):
+            ax.scatter(cel.cycle, cel[ALVO], s=8, color=PAL[i % len(PAL)],
+                       edgecolors="none", zorder=4, label=bat)
+        reta(ax, sub.cycle, sub[ALVO], color=INK, linewidth=1.8,
+             linestyle=(0, (5, 2)), zorder=5)
+        r = freq.loc[cond, "corr_soh_ciclo"]
+        ri = freq.loc[cond, "corr_soh_ciclo_intracelula"]
+        sinal = lambda v: ("+" if v >= 0 else "−") + virg(abs(v), 2)
+        ax.set_title(f"{cond.replace(' C', ' °C')}   n={int(freq.loc[cond, 'descargas'])}",
+                     fontsize=10.5, fontweight="bold", color=INK, loc="left", pad=20)
+        ax.annotate(f"r agrupado {sinal(r)}   ·   intracélula {sinal(ri)}",
+                    (0, 1.02), xycoords="axes fraction",
+                    ha="left", va="bottom", fontsize=9, color=INK2)
+        # Legenda abaixo do eixo x, fora da area de dados, para nao cobrir pontos.
+        ax.legend(fontsize=7.5, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.2),
+                  handletextpad=0.2, columnspacing=0.8, markerscale=1.6)
+        ax.margins(x=0.04, y=0.12)
+        ax.set_xlabel("ciclo de descarga da célula", fontsize=9.5)
+        ax.set_ylabel("SOH (%)", fontsize=9.5)
+        ax.grid(axis="x", visible=False)
+    titulo_figura(plt, fig, "SOH ao longo dos ciclos, célula por célula",
+                  "Mesmos dados da figura 03, agora com uma cor por célula. A reta preta tracejada é a tendência "
+                  "agrupada. Em 1 A / 4 °C dá para ver o paradoxo: cada célula desce, mas "
+                  "B0042–B0044 entram no ciclo 87 com o SOH renormalizado em 100% e puxam "
+                  "a reta para cima.")
+    salvar(plt, fig, "04_dispersao_soh_ciclo_por_celula.png")
+
 
 def main():
     ap = argparse.ArgumentParser(description="Analise descritiva da tabela analitica.")

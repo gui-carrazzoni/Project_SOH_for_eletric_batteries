@@ -19,8 +19,10 @@ descarga, o terceiro eixo do protocolo — 2.0 a 2.7 V conforme a bateria, e
 ausente de `test_condition`.
 
 **O esquema com o corte esta aqui como demonstracao de que nao funciona**, e nao
-como recomendacao. O agrupamento hierarquico de grupos.py mostrou celulas sob o mesmo
-rotulo nominal se separando pelo corte, o que sugeria acrescentar esse eixo. Mas
+como recomendacao. Uma versao anterior de grupos.py mostrava celulas sob o mesmo
+rotulo nominal se separando pelo corte, o que sugeria acrescentar esse eixo —
+mas era vazamento: a curva que ela agrupava terminava na propria tensao de
+corte. Na janela comum a separacao some (ver grupos.py). Alem disso,
 a NASA da um corte diferente a cada bateria do mesmo README, entao
 `condicao x corte` quase identifica a celula: 17 dos 29 grupos ficam com uma
 unica bateria, e o agrupamento vira o `battery_id` que o projeto ja recusa por

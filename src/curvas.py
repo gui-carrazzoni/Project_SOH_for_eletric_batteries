@@ -64,7 +64,13 @@ todas alcancam.
 tempo normalizado (0 = inicio da carga, 1 = fim). Normalizar o tempo separa a
 **forma** da descarga da sua duracao: e o que permite comparar uma descarga de
 6.400 s a 1 A com uma de 240 s a 4 A pelo formato, sem que a diferenca de
-duracao domine tudo. E a materia-prima do agrupamento por comportamento.
+duracao domine tudo.
+
+A mesma curva sai uma segunda vez na janela comum, como `c00`..`c49`, junto com
+`V_medio_comum`, `T_subida_comum` e `fracao_energia_1a_metade_comum`. Pelo mesmo
+motivo das areas: `v49` e a tensao de corte da celula (r = 0,98), e quem
+agrupar por `v00`..`v49` esta agrupando, em parte, pelo protocolo. As colunas
+`_comum` sao a materia-prima do agrupamento por comportamento.
 
 Dependencias: numpy, pandas
 """
@@ -174,9 +180,10 @@ def extrair(c, np):
         # Falso quando a celula nunca chega ao piso: a janela comum ficou
         # truncada no fim da descarga e a area nao e comparavel as demais.
         r["atingiu_piso"] = bool(len(abaixo))
+        r.update(forma_comum(np, tp, vp, ip, temp[:kp + 1], r["energia_Wh_comum"]))
     else:
         for c in ("carga_Ah_comum", "tensao_Vs_comum", "energia_Wh_comum",
-                  "duracao_s_comum"):
+                  "duracao_s_comum") + COLUNAS_FORMA_COMUM:
             r[c] = float("nan")
         r["atingiu_piso"] = False
 
@@ -215,6 +222,42 @@ def extrair(c, np):
             e_meio / r["energia_Wh"] if r["energia_Wh"] > 0 else float("nan"))
     else:
         r["fracao_energia_1a_metade"] = float("nan")
+    return r
+
+
+COLUNAS_FORMA_COMUM = (("V_medio_comum", "T_subida_comum",
+                        "fracao_energia_1a_metade_comum")
+                       + tuple(f"c{i:02d}" for i in range(N_REAMOSTRA)))
+
+
+def forma_comum(np, t, v, i, temp, energia):
+    """A forma da descarga, so que dentro da janela comum.
+
+    Os descritores de forma de extrair() olham o trecho sob carga inteiro, ate o
+    corte de cada celula, e por isso carregam o corte junto: o ultimo ponto da
+    curva, v49, e a propria tensao de corte (r = 0,98 com ela). Para o
+    agrupamento por comportamento isso e vazamento — o cluster "descobre" um
+    protocolo que lhe foi entregue. Aqui as mesmas grandezas param em
+    PISO_COMUM, igual para todas, e `c00`..`c49` e a curva em tempo normalizado
+    dentro dessa janela.
+    """
+    dur = float(t[-1] - t[0])
+    r = {
+        "V_medio_comum": float(v.mean()),
+        "T_subida_comum": float(temp.max() - temp[0]),
+    }
+    meio = len(t) // 2
+    if meio > 1 and energia > 0:
+        e_meio = integrar(np, (v * i)[:meio + 1], t[:meio + 1]) / 3600.0
+        r["fracao_energia_1a_metade_comum"] = e_meio / energia
+    else:
+        r["fracao_energia_1a_metade_comum"] = float("nan")
+    if dur > 0:
+        vq = np.interp(np.linspace(0.0, 1.0, N_REAMOSTRA), (t - t[0]) / dur, v)
+    else:
+        vq = np.full(N_REAMOSTRA, float("nan"))
+    for k, val in enumerate(vq):
+        r[f"c{k:02d}"] = float(val)
     return r
 
 

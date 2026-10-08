@@ -3,7 +3,7 @@
 """
 Grupos de comportamento medido, contra o rotulo nominal de condicao de ensaio.
 
-    python grupos.py                # escolhe k pela silhueta
+    python grupos.py                # escolhe k por silhueta + estabilidade
     python grupos.py --grupos 5     # forca k=5
     python grupos.py --sem-graficos # so as tabelas
 
@@ -23,27 +23,46 @@ de uma celula, o que nao serve para nada.
 
 **So os ciclos de inicio de vida entram no agrupamento.** Se todos os ciclos
 entrassem, uma celula degradada num regime brando pareceria uma celula nova num
-regime severo, e o cluster acabaria medindo degradacao em vez de regime. O
-recorte inicial descreve a celula quando ela ainda esta inteira, que e quando o
-regime e a unica coisa que a distingue.
+regime severo, e o cluster acabaria medindo degradacao em vez de regime.
 
-**O agrupamento usa a resposta, nunca o protocolo.** Corrente aplicada e
-temperatura ambiente ficam **fora** do vetor de atributos, de proposito. Inclui-
-las faria o cluster reproduzir o rotulo nominal por construcao, e a comparacao
-entre os dois nao provaria nada. O que entra e o que a celula respondeu: a forma
-da curva de tensao, quanto durou, quanta carga e energia saiu, o quanto a tensao
-cedeu e o quanto a celula esquentou. Assim a tabela de contingencia vira um
-teste de verdade — o comportamento recupera o protocolo, ou nao?
+**O agrupamento usa a resposta, nunca o protocolo.** Corrente aplicada,
+temperatura ambiente **e tensao de corte** ficam fora do vetor de atributos.
+Os dois primeiros sao `test_condition`; o terceiro e o eixo de protocolo que
+`test_condition` nao registra, e entrava escondido na versao anterior deste
+script: o ultimo ponto da curva, `v49`, *e* a tensao de corte (r = 0,98), e
+`queda_V` e quase determinada por ela (r = -0,79). O cluster "descobria" o
+corte porque o recebia. Por isso tudo aqui vem da **janela comum** de
+curvas.py, que para em 2,7 V para todas as celulas: as tres magnitudes
+`_comum`, a forma `c00`..`c49` e os descritores de forma `_comum`.
 
-**As magnitudes entram em log.** Duracao vai de 1 a 106 minutos e carga de 0,06
-a 1,77 Ah. Em escala linear a distancia euclidiana entre dois regimes brandos
-fica invisivel ao lado da distancia ate 4 A / 4 C, e o agrupamento vira "4 A / 4
-C contra todo o resto". O log torna a diferenca **proporcional**, que e como
-esses regimes se ordenam.
+**Atributos redundantes saem antes da distancia.** Carga, energia e duracao
+correlacionam acima de 0,95 entre si: na distancia euclidiana seriam a mesma
+grandeza contada tres vezes. Um filtro guloso mantem o primeiro de cada par com
+|r| > LIMIAR_REDUNDANCIA, e um PCA que retem VARIANCIA_PCA da variancia
+descorrelaciona o que sobra e descarta as direcoes de ruido.
 
-Ligacao de Ward sobre distancia euclidiana, com os atributos padronizados. O k e
-escolhido pela silhueta media, e `--grupos` permite sobrepor a escolha depois de
-olhar o dendrograma.
+**Pares extremos ficam num grupo proprio, declarado.** Tres celulas a 4 A / 4 C
+entregam 0,06 Ah contra ~1,5 das demais. Dentro do agrupamento elas inflam a
+silhueta de qualquer particao que as isole, e a silhueta passa a escolher k=2
+por patologia. Sao identificadas pelo escore-z modificado de Iglewicz e
+Hoaglin (mediana e MAD, robustos ao proprio extremo), e entram no relatorio
+como grupo a parte.
+
+**k sai de dois criterios, nao de um.** Para cada k: silhueta media
+(separacao) e estabilidade por bootstrap (ARI medio entre a particao completa e
+a de reamostragens). Sao candidatos os k com estabilidade >= ESTAB_MIN e nenhum
+grupo menor que TAMANHO_MIN, e vence o **menor** candidato. Nao a maior
+silhueta: neste dado ela cresce quase sem parar com k, porque pares da mesma
+condicao sao quase identicos entre si, e o maximo cai na borda da faixa
+avaliada — sinal de fragmentacao, nao de estrutura. Entre particoes igualmente
+estaveis, a mais grossa e a que descreve regimes; as mais finas descrevem
+celulas.
+
+**A validacao e numerica.** ARI e NMI contra a condicao nominal e contra o corte,
+e ARI entre Ward e k-means no mesmo k: se dois algoritmos com vieses distintos
+chegam a mesma particao, ela nao e artefato do metodo.
+
+Ligacao de Ward sobre distancia euclidiana no espaco do PCA.
 
 Dependencias: numpy, pandas, scipy, matplotlib
 """
@@ -61,27 +80,38 @@ SAIDA = RAIZ / "saida_nasa" / "cluster" / "agrupamento"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+COR_EXTREMO = "#52514e"
 SURF, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e3e2de"
 SEQ = ["#f0efec", "#cfe0f5", "#9dc3ea", "#6d9fe4", "#2a78d6", "#104281"]
 
 CICLOS_INICIO = 10       # ciclos de inicio de vida que descrevem o regime
 MIN_DESCARGAS = 3        # abaixo disso a bateria x condicao nao rende perfil
-K_MIN, K_MAX = 2, 10     # faixa de k avaliada pela silhueta
+K_MIN, K_MAX = 2, 10     # faixa de k avaliada
 
-# A resposta da celula. Corrente aplicada e temperatura ambiente ficam fora:
-# sao o protocolo, e inclui-las faria o cluster recuperar o nominal por
-# construcao. `log` marca as que entram em escala logaritmica.
+LIMIAR_REDUNDANCIA = 0.95  # |r| acima disso: o segundo atributo do par sai
+VARIANCIA_PCA = 0.95       # fracao da variancia retida pelo PCA
+Z_EXTREMO = 3.5            # escore-z modificado (Iglewicz e Hoaglin, 1993)
+N_BOOT = 200               # reamostragens para a estabilidade
+ESTAB_MIN = 0.75           # estabilidade minima para k ser candidato
+TAMANHO_MIN = 2            # grupo de um par so nao e grupo
+SEMENTE = 0
+
+# A resposta da celula, toda na janela comum. A ordem importa: no filtro de
+# redundancia, o primeiro de cada par correlacionado e o que fica. `log` marca
+# as magnitudes que entram em escala logaritmica — duracao vai de 1 a 106 min,
+# e em escala linear o agrupamento vira "4 A / 4 C contra o resto".
 ATRIBUTOS = [
-    ("carga_Ah", True),
-    ("energia_Wh", True),
-    ("duracao_s", True),
-    ("queda_V", False),
-    ("V_medio", False),
-    ("inclinacao_mV_min", False),
-    ("T_subida", False),
-    ("fracao_energia_1a_metade", False),
+    ("energia_Wh_comum", True),
+    ("carga_Ah_comum", True),
+    ("duracao_s_comum", True),
+    ("V_medio_comum", False),
+    ("T_subida_comum", False),
+    ("fracao_energia_1a_metade_comum", False),
 ]
-N_CURVA = 50             # colunas v00..v49 da curva reamostrada
+N_CURVA = 50
+CURVA = [f"c{i:02d}" for i in range(N_CURVA)]   # forma na janela comum
+# Magnitudes onde o extremo e procurado: as tres areas, em log.
+MAGNITUDES = ["energia_Wh_comum", "carga_Ah_comum", "duracao_s_comum"]
 
 
 def p(msg: str = "") -> None:
@@ -120,58 +150,113 @@ def perfis(mods, df):
     trazem medicao falha — o mesmo motivo que impede normalizar pelo primeiro
     ciclo neste dataset.
     """
-    np, pd = mods["numpy"], mods["pandas"]
-    d = df[df.carga_Ah.notna() & df.condicao.notna()].copy()
+    d = df[df.carga_Ah_comum.notna() & df.condicao.notna()].copy()
 
     # Recorte de inicio de vida dentro da condicao: ciclo_na_condicao ja conta
     # a partir da entrada da celula naquele regime, que e o que importa para as
     # 9 baterias que mudam de condicao no meio da vida.
     d = d[d.ciclo_na_condicao < CICLOS_INICIO]
 
-    cols = [c for c, _ in ATRIBUTOS] + [f"v{i:02d}" for i in range(N_CURVA)]
+    cols = [c for c, _ in ATRIBUTOS] + CURVA
     g = d.groupby(["battery_id", "condicao"])
     perfil = g[cols].median()
     perfil["descargas_inicio"] = g.size()
     perfil = perfil[perfil.descargas_inicio >= MIN_DESCARGAS]
-    perfil = perfil.dropna(subset=[c for c, _ in ATRIBUTOS])
+    perfil = perfil.dropna(subset=cols)
 
-    # Quantas descargas a bateria x condicao tem no total, para o relatorio
-    # saber o que cada grupo carrega de dados.
     tot = df.groupby(["battery_id", "condicao"]).size().rename("descargas_total")
     perfil = perfil.join(tot)
 
-    # Os rotulos nominais viajam junto, mas so para nomear e comparar depois:
-    # nao entram no vetor de atributos do agrupamento.
+    # Os rotulos de protocolo viajam junto, mas so para nomear e validar
+    # depois: nenhum entra no vetor de atributos do agrupamento.
     nom = g[["corrente_A", "ambient_temperature"]].median()
-    perfil = perfil.join(nom)
-    return perfil.reset_index()
+    perfil = perfil.join(nom).reset_index()
+    proto = protocolo()
+    perfil["descarga"] = perfil.battery_id.map(lambda b: proto[b][0])
+    perfil["corte_V"] = perfil.battery_id.map(lambda b: proto[b][1])
+    return perfil
+
+
+def protocolo():
+    """Perfil de descarga e tensao de corte por bateria.
+
+    So para validar e descrever, nunca para agrupar. Vem de
+    correlacao_soh.PROTOCOLO, transcrito dos README da NASA.
+    """
+    from correlacao_soh import PROTOCOLO
+    return PROTOCOLO
+
+
+def extremos(mods, perfil):
+    """Pares cujas magnitudes ficam longe demais do resto.
+
+    Escore-z modificado, 0,6745 (x - mediana) / MAD, sobre o log das tres
+    areas. Mediana e MAD nao se deixam puxar pelo proprio extremo, ao contrario
+    de media e desvio padrao — que e justamente o problema que se quer evitar.
+    """
+    np = mods["numpy"]
+    marca = np.zeros(len(perfil), dtype=bool)
+    for col in MAGNITUDES:
+        x = np.log10(np.clip(perfil[col].to_numpy(float), 1e-6, None))
+        med = np.median(x)
+        mad = np.median(np.abs(x - med))
+        if mad > 0:
+            marca |= np.abs(0.6745 * (x - med) / mad) > Z_EXTREMO
+    return marca
 
 
 def matriz(mods, perfil):
-    """Perfis -> matriz padronizada para o agrupamento.
+    """Perfis -> escores do PCA, prontos para a distancia euclidiana.
 
-    A curva reamostrada entra como bloco unico com peso equivalente ao das
-    magnitudes somadas: sao 50 colunas contra 8, e sem reequilibrar a forma
-    dominaria a distancia sozinha.
+    1. magnitudes padronizadas (log onde marcado);
+    2. filtro de redundancia: sai o segundo de cada par com |r| > limiar;
+    3. a curva entra centrada, com uma escala unica para o bloco todo, e nao
+       coluna a coluna: c49 e ~2,7 V em todas as celulas por construcao, e
+       padroniza-la coluna a coluna transformaria ruido de medicao em sinal.
+       O bloco e reescalado para ter a mesma variancia total das magnitudes
+       que ficaram — sem isso 50 colunas abafariam 4;
+    4. PCA retendo VARIANCIA_PCA da variancia.
     """
     np = mods["numpy"]
-    blocos, nomes = [], []
-
+    blocos = {}
     for col, usar_log in ATRIBUTOS:
         x = perfil[col].to_numpy(float)
         if usar_log:
             x = np.log10(np.clip(x, 1e-6, None))
-        blocos.append(_z(np, x).reshape(-1, 1))
-        nomes.append(col)
+        blocos[col] = _z(np, x)
 
-    curva = perfil[[f"v{i:02d}" for i in range(N_CURVA)]].to_numpy(float)
-    curva = np.apply_along_axis(lambda c: _z(np, c), 0, curva)
-    # Reescala o bloco inteiro para pesar como len(ATRIBUTOS) colunas.
-    curva *= np.sqrt(len(ATRIBUTOS) / N_CURVA)
-    blocos.append(curva)
-    nomes += [f"v{i:02d}" for i in range(N_CURVA)]
+    mantidos, removidos = [], []
+    for col, _ in ATRIBUTOS:
+        par = next((m for m in mantidos
+                    if abs(np.corrcoef(blocos[col], blocos[m])[0, 1]) > LIMIAR_REDUNDANCIA),
+                   None)
+        if par:
+            removidos.append((col, par, np.corrcoef(blocos[col], blocos[par])[0, 1]))
+        else:
+            mantidos.append(col)
 
-    return np.hstack(blocos), nomes
+    mag = np.column_stack([blocos[c] for c in mantidos])
+    curva = perfil[CURVA].to_numpy(float)
+    curva = curva - curva.mean(0)
+    var_curva = (curva ** 2).sum() / len(curva)
+    if var_curva > 0:
+        curva *= np.sqrt(len(mantidos) / var_curva)
+    X = np.hstack([mag, curva])
+
+    X = X - X.mean(0)
+    U, S, Vt = np.linalg.svd(X, full_matrices=False)
+    ev = S ** 2 / (S ** 2).sum()
+    q = int(np.searchsorted(np.cumsum(ev), VARIANCIA_PCA) + 1)
+    escores = U[:, :q] * S[:q]
+
+    # Quanto cada atributo pesa nas componentes retidas, para o relatorio dizer
+    # o que cada eixo do PCA esta medindo.
+    nomes = mantidos + ["curva"]
+    carga_pc = np.vstack([Vt[:q, :len(mantidos)].T,
+                          np.sqrt((Vt[:q, len(mantidos):] ** 2).sum(1))])
+    info = {"mantidos": mantidos, "removidos": removidos,
+            "variancia": ev[:q], "nomes_carga": nomes, "carga_pc": carga_pc}
+    return escores, info
 
 
 def _z(np, x):
@@ -179,8 +264,10 @@ def _z(np, x):
     return (x - x.mean()) / s if s > 0 else x * 0.0
 
 
+# ---------------------------------------------------------------------------
+# metricas de agrupamento, na mao: scipy nao traz e nao vale puxar scikit-learn
+# ---------------------------------------------------------------------------
 def silhueta(mods, X, rotulos):
-    """Silhueta media, na mao: scipy nao traz e nao vale puxar scikit-learn."""
     np = mods["numpy"]
     from scipy.spatial.distance import squareform, pdist
     D = squareform(pdist(X))
@@ -193,46 +280,130 @@ def silhueta(mods, X, rotulos):
         dentro = (rotulos == meu)
         dentro[i] = False
         if dentro.sum() == 0:
-            s[i] = 0.0
-            continue
+            continue                      # grupo unitario: s = 0 por convencao
         a = D[i, dentro].mean()
         b = min(D[i, rotulos == o].mean() for o in unicos if o != meu)
         s[i] = (b - a) / max(a, b)
     return float(s.mean())
 
 
-def agrupar(mods, X, k_forcado=None):
+def _contingencia(mods, a, b):
+    pd = mods["pandas"]
+    return pd.crosstab(pd.Series(list(a)), pd.Series(list(b))).to_numpy(float)
+
+
+def ari(mods, a, b):
+    """Indice de Rand ajustado (Hubert e Arabie, 1985). 0 = acaso, 1 = identico."""
     np = mods["numpy"]
+    ct = _contingencia(mods, a, b)
+    c2 = lambda x: x * (x - 1) / 2
+    soma = c2(ct).sum()
+    sa, sb = c2(ct.sum(1)).sum(), c2(ct.sum(0)).sum()
+    esperado = sa * sb / c2(ct.sum())
+    maximo = (sa + sb) / 2
+    return float((soma - esperado) / (maximo - esperado)) if maximo != esperado else 1.0
+
+
+def nmi(mods, a, b):
+    """Informacao mutua normalizada pela media aritmetica das entropias."""
+    np = mods["numpy"]
+    ct = _contingencia(mods, a, b)
+    pij = ct / ct.sum()
+    pi, pj = pij.sum(1), pij.sum(0)
+    nz = pij > 0
+    mi = (pij[nz] * np.log(pij[nz] / np.outer(pi, pj)[nz])).sum()
+    h = lambda q: -(q[q > 0] * np.log(q[q > 0])).sum()
+    den = (h(pi) + h(pj)) / 2
+    return float(mi / den) if den > 0 else 1.0
+
+
+def ward(X, k):
     from scipy.cluster.hierarchy import linkage, fcluster
-    Z = linkage(X, method="ward")
+    return fcluster(linkage(X, method="ward"), k, criterion="maxclust")
 
-    escolha, tabela = None, []
+
+def kmeans(mods, X, k, reinicios=20):
+    """k-means++ com varios reinicios; fica a solucao de menor inercia."""
+    np = mods["numpy"]
+    from scipy.cluster.vq import kmeans2
+    melhor = None
+    for s in range(reinicios):
+        c, r = kmeans2(X, k, minit="++", rng=SEMENTE + s)
+        inercia = ((X - c[r]) ** 2).sum()
+        if melhor is None or inercia < melhor[0]:
+            melhor = (inercia, r)
+    return melhor[1]
+
+
+def estabilidade(mods, X, k, rng):
+    """ARI medio entre a particao completa e a de cada reamostragem bootstrap.
+
+    Cada reamostragem e reagrupada do zero, e a comparacao e feita so nos pares
+    sorteados. Particao estavel e a que nao depende de quais pares estavam la.
+    """
+    np = mods["numpy"]
+    cheia = ward(X, k)
+    vals = []
+    for _ in range(N_BOOT):
+        idx = np.unique(rng.choice(len(X), len(X), replace=True))
+        if len(idx) <= k:
+            continue
+        vals.append(ari(mods, cheia[idx], ward(X[idx], k)))
+    return float(np.mean(vals)), float(np.std(vals))
+
+
+def avaliar(mods, X, perfil):
+    """Uma linha por k: separacao, estabilidade, tamanho e concordancias."""
+    np, pd = mods["numpy"], mods["pandas"]
+    rng = np.random.default_rng(SEMENTE)
+    linhas = []
     for k in range(K_MIN, min(K_MAX, len(X) - 1) + 1):
-        r = fcluster(Z, k, criterion="maxclust")
-        tabela.append((k, silhueta(mods, X, r)))
-    p("")
-    p("  silhueta por numero de grupos:")
-    for k, s in tabela:
-        marca = ""
-        p(f"    k={k:<3} {s:+.3f}{marca}")
-    escolha = max(tabela, key=lambda t: t[1])[0]
+        r = ward(X, k)
+        est, dp = estabilidade(mods, X, k, rng)
+        linhas.append({
+            "k": k,
+            "silhueta": silhueta(mods, X, r),
+            "estabilidade": est,
+            "estabilidade_dp": dp,
+            "menor_grupo": int(np.bincount(r)[1:].min()),
+            "ari_kmeans": ari(mods, r, kmeans(mods, X, k)),
+            "ari_condicao": ari(mods, r, perfil.condicao),
+            "ari_corte": ari(mods, r, perfil.corte_V),
+        })
+    return pd.DataFrame(linhas)
 
-    if k_forcado:
-        p(f"\n  k={escolha} pela silhueta, mas --grupos {k_forcado} foi pedido")
-        escolha = k_forcado
+
+def escolher_k(tab, k_forcado=None):
+    cand = tab[(tab.estabilidade >= ESTAB_MIN) & (tab.menor_grupo >= TAMANHO_MIN)]
+    p("")
+    p(f"  {'k':>3} {'silhueta':>9} {'estab.':>12} {'menor':>6} "
+      f"{'Ward~km':>8} {'ARI cond':>9} {'ARI corte':>10}")
+    for r in tab.itertuples(index=False):
+        ok = "*" if r.k in set(cand.k) else " "
+        p(f"  {r.k:>3} {r.silhueta:>+9.3f} {r.estabilidade:>6.2f} +-{r.estabilidade_dp:.2f} "
+          f"{r.menor_grupo:>6} {r.ari_kmeans:>+8.2f} {r.ari_condicao:>+9.2f} "
+          f"{r.ari_corte:>+10.2f} {ok}")
+    p(f"  * candidatos: estabilidade >= {ESTAB_MIN} e nenhum grupo com menos "
+      f"de {TAMANHO_MIN} pares")
+
+    if len(cand):
+        escolha = int(cand.k.min())
+        p(f"\n  k={escolha}: o menor candidato")
     else:
-        p(f"\n  k={escolha} escolhido pela silhueta")
-    return Z, fcluster(Z, escolha, criterion="maxclust"), escolha, tabela
+        escolha = int(tab.loc[tab.silhueta.idxmax(), "k"])
+        p(f"\n  AVISO: nenhum k passou nos dois criterios; k={escolha} so pela silhueta")
+    if k_forcado:
+        p(f"  --grupos {k_forcado} sobrepoe a escolha")
+        escolha = k_forcado
+    return escolha
 
 
 def nomear(mods, perfil):
     """Da a cada grupo um nome legivel, a partir do que ele contem.
 
-    Um numero de cluster nao diz nada a quem le o artigo. O nome sai das
-    correntes e temperaturas nominais que caem no grupo — o rotulo nominal nao
-    define o grupo, mas descreve bem o que ele reuniu.
+    O nome sai das correntes e temperaturas nominais que caem no grupo — o
+    rotulo nominal nao define o grupo, mas descreve bem o que ele reuniu.
     """
-    pd = mods["pandas"]
     nomes = {}
     for gid, bloco in perfil.groupby("grupo"):
         corr = sorted({c for c in bloco.corrente_A.dropna()})
@@ -241,7 +412,8 @@ def nomear(mods, perfil):
               else f"{min(corr):.0f}-{max(corr):.0f} A")
         ft = (f"{temp[0]} C" if len(temp) == 1
               else f"{min(temp)}-{max(temp)} C")
-        nomes[gid] = f"G{gid}: {fc} / {ft}"
+        sufixo = " (extremo)" if bloco.extremo.all() else ""
+        nomes[gid] = f"G{gid}: {fc} / {ft}{sufixo}"
     return nomes
 
 
@@ -253,55 +425,76 @@ def relatar(mods, perfil, nomes):
     p("")
     p("  grupos de comportamento medido:")
     for gid, bloco in perfil.groupby("grupo"):
-        p(f"    {nomes[gid]:<22} {len(bloco):>2} pares bateria x condicao, "
+        p(f"    {nomes[gid]:<32} {len(bloco):>2} pares, "
           f"{int(bloco.descargas_total.sum()):>4} descargas, "
-          f"{bloco.carga_Ah.median():.3f} Ah  {bloco.duracao_s.median()/60:.1f} min")
+          f"{bloco.energia_Wh_comum.median():.2f} Wh  "
+          f"{bloco.duracao_s_comum.median()/60:.1f} min  "
+          f"{bloco.V_medio_comum.median():.2f} V")
         for cond, sub in bloco.groupby("condicao"):
-            cels = ", ".join(sorted(sub.battery_id))
+            cels = ", ".join(f"{b} ({c:.1f} V{', pulsada' if d == 'pulsado' else ''})"
+                             for b, c, d in sorted(zip(sub.battery_id, sub.corte_V,
+                                                       sub.descarga)))
             p(f"        {cond:<12} {cels}")
 
     cont = pd.crosstab(perfil.condicao, perfil.grupo.map(nomes))
     p("")
-    p("  contingencia: condicao nominal x grupo medido")
-    p("  (celula = pares bateria x condicao)")
-    linhas = cont.to_string().split("\n")
-    for lin in linhas:
+    p("  contingencia: condicao nominal x grupo medido (pares bateria x condicao)")
+    for lin in cont.to_string().split("\n"):
         p("    " + lin)
     return cont
 
 
-def veredito(mods, perfil, cont, nomes):
-    """O que o agrupamento medido muda em relacao ao nominal."""
+def validar(mods, perfil, X, normais, k):
+    """As concordancias que viram numero no artigo."""
     pd = mods["pandas"]
+    todos = perfil.grupo
+    sub = perfil[normais]
+    linhas = [
+        ("condicao nominal", "todos os pares", ari(mods, todos, perfil.condicao),
+         nmi(mods, todos, perfil.condicao)),
+        ("tensao de corte", "todos os pares", ari(mods, todos, perfil.corte_V),
+         nmi(mods, todos, perfil.corte_V)),
+        ("condicao nominal", "sem extremos", ari(mods, sub.grupo, sub.condicao),
+         nmi(mods, sub.grupo, sub.condicao)),
+        ("tensao de corte", "sem extremos", ari(mods, sub.grupo, sub.corte_V),
+         nmi(mods, sub.grupo, sub.corte_V)),
+    ]
+    km = kmeans(mods, X, k)
+    linhas.append(("k-means (mesmo k)", "sem extremos", ari(mods, sub.grupo, km),
+                   nmi(mods, sub.grupo, km)))
+    val = pd.DataFrame(linhas, columns=["referencia", "conjunto", "ARI", "NMI"])
+    p("")
+    p("  concordancia do agrupamento com:")
+    for r in val.itertuples(index=False):
+        p(f"    {r.referencia:<20} {r.conjunto:<16} ARI {r.ARI:+.2f}   NMI {r.NMI:.2f}")
+    return val
+
+
+def veredito(mods, perfil, nomes):
+    """O que o agrupamento medido muda em relacao ao nominal."""
     p("")
     p("  o que muda:")
-
-    # Condicoes nominais que o comportamento funde.
-    fundidas = {}
     for gid, bloco in perfil.groupby("grupo"):
         conds = sorted(bloco.condicao.unique())
         if len(conds) > 1:
-            fundidas[nomes[gid]] = conds
-    if fundidas:
-        for g, conds in fundidas.items():
-            p(f"    funde   {g}: {', '.join(conds)}")
-    else:
-        p("    nenhuma condicao nominal foi fundida")
-
-    # Condicoes nominais que o comportamento parte em mais de um grupo.
-    partidas = {}
+            p(f"    funde   {nomes[gid]}: {', '.join(conds)}")
     for cond, bloco in perfil.groupby("condicao"):
         gs = sorted(bloco.grupo.unique())
         if len(gs) > 1:
-            partidas[cond] = [nomes[g] for g in gs]
-    if partidas:
-        for c, gs in partidas.items():
-            p(f"    parte   {c}: {', '.join(gs)}")
-    else:
-        p("    nenhuma condicao nominal foi partida")
+            p(f"    parte   {cond}: {', '.join(nomes[g] for g in gs)}")
 
-    # O ganho pratico: grupos que hoje morrem por serem curtos demais e que,
-    # fundidos, passam a ter dados suficientes.
+    # A pergunta que a versao anterior respondia errado: dentro de uma mesma
+    # condicao, o corte separa as celulas?
+    p("")
+    p("  dentro de cada condicao com mais de um corte, o grupo segue o corte?")
+    for cond, bloco in perfil.groupby("condicao"):
+        if bloco.corte_V.nunique() < 2 or len(bloco) < 4:
+            continue
+        segue = (bloco.groupby("corte_V").grupo.nunique().max() == 1
+                 and bloco.groupby("grupo").corte_V.nunique().max() == 1)
+        p(f"    {cond:<12} {bloco.corte_V.nunique()} cortes, "
+          f"{bloco.grupo.nunique()} grupo(s): {'sim' if segue else 'nao'}")
+
     p("")
     n_nom = perfil.groupby("condicao").descargas_total.sum()
     n_med = perfil.groupby(perfil.grupo.map(nomes)).descargas_total.sum()
@@ -347,52 +540,57 @@ def salvar(plt, fig, nome):
     p(f"  {nome}")
 
 
-def desenhar(mods, plt, perfil, Z, k, tabela, cont, nomes):
-    np, pd = mods["numpy"], mods["pandas"]
-    from scipy.cluster.hierarchy import dendrogram
+def desenhar(mods, plt, perfil, normais, X, info, k, tab, cont, nomes):
+    np = mods["numpy"]
+    from scipy.cluster.hierarchy import dendrogram, linkage
 
     gids = sorted(perfil.grupo.unique())
-    cor = {g: PAL[i % len(PAL)] for i, g in enumerate(gids)}
+    cor = {g: (COR_EXTREMO if perfil[perfil.grupo == g].extremo.all()
+               else PAL[i % len(PAL)]) for i, g in enumerate(gids)}
+    sub = perfil[normais].reset_index(drop=True)
 
     # 01 — dendrograma
-    rot = [f"{r.battery_id} {r.condicao}" for r in perfil.itertuples(index=False)]
-    fig, ax = plt.subplots(figsize=(9, max(6, 0.22 * len(perfil) + 2)))
+    Z = linkage(X, method="ward")
+    rot = [f"{r.battery_id} {r.condicao} ({r.corte_V:.1f} V)"
+           for r in sub.itertuples(index=False)]
+    fig, ax = plt.subplots(figsize=(9, max(6, 0.22 * len(sub) + 2)))
     corte = _altura_corte(Z, k, np)
     dendrogram(Z, labels=rot, orientation="right", ax=ax,
                color_threshold=corte, above_threshold_color=INK2,
                leaf_font_size=7.5)
     ax.axvline(corte, color=INK2, linestyle="--", linewidth=1.2)
-    ax.set_xlabel("distancia de ligacao (Ward)")
+    ax.set_xlabel("distancia de ligacao (Ward, espaco do PCA)")
     ax.grid(axis="y", visible=False)
     titulo_figura(plt, fig, "Agrupamento por comportamento medido",
                   f"Cada folha e uma bateria x condicao, descrita pelos {CICLOS_INICIO} "
-                  f"primeiros ciclos naquele regime. Corrente e temperatura nominais "
-                  f"ficaram fora dos atributos: o agrupamento ve so a resposta da celula. "
-                  f"Linha tracejada marca o corte em k={k}.")
+                  f"primeiros ciclos na janela comum ate 2,7 V. Corrente, temperatura e "
+                  f"tensao de corte ficaram fora dos atributos. Os "
+                  f"{int((~normais).sum())} pares extremos sao grupo a parte e nao "
+                  f"aparecem aqui. Linha tracejada marca o corte em k={k}.")
     salvar(plt, fig, "01_dendrograma.png")
 
     # 02 — curvas medias por grupo
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
     grade = np.linspace(0, 1, N_CURVA)
-    vcols = [f"v{i:02d}" for i in range(N_CURVA)]
     for g in gids:
         bloco = perfil[perfil.grupo == g]
-        axes[0].plot(grade, bloco[vcols].median().to_numpy(float),
+        axes[0].plot(grade, bloco[CURVA].median().to_numpy(float),
                      color=cor[g], label=nomes[g])
-        axes[1].scatter(bloco.duracao_s / 60, bloco.carga_Ah,
+        axes[1].scatter(bloco.duracao_s_comum / 60, bloco.energia_Wh_comum,
                         color=cor[g], s=42, alpha=0.85, edgecolor=SURF, linewidth=0.6)
-    axes[0].set_xlabel("tempo normalizado da descarga")
+    axes[0].set_xlabel("tempo normalizado na janela comum")
     axes[0].set_ylabel("tensao medida (V)")
     axes[0].set_title("forma da curva, por grupo", fontsize=11, color=INK2)
-    axes[0].legend(fontsize=8.5, loc="lower left")
+    axes[0].legend(fontsize=8, loc="lower left")
     axes[1].set_xscale("log")
-    axes[1].set_xlabel("duracao sob carga (min, log)")
-    axes[1].set_ylabel("carga integrada (Ah)")
+    axes[1].set_yscale("log")
+    axes[1].set_xlabel("duracao ate 2,7 V (min, log)")
+    axes[1].set_ylabel("energia ate 2,7 V (Wh, log)")
     axes[1].set_title("magnitude, por grupo", fontsize=11, color=INK2)
     titulo_figura(plt, fig, "O que separa os grupos",
                   "A esquerda a forma da descarga com o tempo normalizado, a direita a "
-                  "magnitude. Um grupo so se justifica se as celulas dentro dele se "
-                  "parecerem mais entre si do que com as de fora.")
+                  "magnitude, ambas na janela comum. Cinza: o grupo extremo, separado "
+                  "antes do agrupamento.")
     salvar(plt, fig, "02_curvas_por_grupo.png")
 
     # 03 — contingencia nominal x medido
@@ -421,18 +619,51 @@ def desenhar(mods, plt, perfil, Z, k, tabela, cont, nomes):
                   "colunas significa que o rotulo nominal reune regimes distintos.")
     salvar(plt, fig, "03_contingencia.png")
 
-    # 04 — silhueta
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ks = [t[0] for t in tabela]
-    ss = [t[1] for t in tabela]
-    ax.plot(ks, ss, marker="o", color=PAL[0])
-    ax.axvline(k, color=PAL[1], linestyle="--", linewidth=1.4)
-    ax.set_xlabel("numero de grupos (k)")
-    ax.set_ylabel("silhueta media")
+    # 04 — escolha de k: silhueta e estabilidade
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    cand = (tab.estabilidade >= ESTAB_MIN) & (tab.menor_grupo >= TAMANHO_MIN)
+    axes[0].plot(tab.k, tab.silhueta, marker="o", color=PAL[0])
+    axes[0].scatter(tab.k[~cand], tab.silhueta[~cand], color=SURF,
+                    edgecolor=PAL[0], s=40, zorder=3, linewidth=1.5)
+    axes[0].set_ylabel("silhueta media")
+    axes[1].errorbar(tab.k, tab.estabilidade, yerr=tab.estabilidade_dp,
+                     marker="o", color=PAL[2], capsize=3)
+    axes[1].axhline(ESTAB_MIN, color=INK2, linestyle=":", linewidth=1.2)
+    axes[1].set_ylabel("estabilidade (ARI bootstrap)")
+    for ax in axes:
+        ax.axvline(k, color=PAL[1], linestyle="--", linewidth=1.4)
+        ax.set_xlabel("numero de grupos (k)")
     titulo_figura(plt, fig, "Quantos grupos o dado sustenta",
-                  f"Silhueta media por k. Escolhido k={k}. Valores altos indicam grupos "
-                  f"internamente parecidos e bem separados entre si.")
-    salvar(plt, fig, "04_silhueta.png")
+                  f"Silhueta (separacao) e estabilidade sob {N_BOOT} reamostragens "
+                  f"bootstrap. Pontos vazados nao sao candidatos: estabilidade abaixo "
+                  f"de {ESTAB_MIN} ou grupo com menos de {TAMANHO_MIN} pares. "
+                  f"Escolhido k={k}, o menor candidato.")
+    salvar(plt, fig, "04_escolha_de_k.png")
+
+    # 05 — os pares no plano das duas primeiras componentes
+    fig, ax = plt.subplots(figsize=(8.5, 6))
+    marcadores = dict(zip(sorted(sub.condicao.unique()), "osD^v<>pPhX"))
+    for g in sorted(sub.grupo.unique()):
+        for cond, mk in marcadores.items():
+            s = (sub.grupo == g).to_numpy() & (sub.condicao == cond).to_numpy()
+            if s.any():
+                ax.scatter(X[s, 0], X[s, 1], color=cor[g], marker=mk, s=55,
+                           edgecolor=SURF, linewidth=0.6, alpha=0.9)
+    from matplotlib.lines import Line2D
+    leg_g = [Line2D([], [], color=cor[g], marker="o", linestyle="", label=nomes[g])
+             for g in sorted(sub.grupo.unique())]
+    leg_c = [Line2D([], [], color=INK2, marker=mk, linestyle="", label=c)
+             for c, mk in marcadores.items()]
+    l1 = ax.legend(handles=leg_g, fontsize=8, loc="upper left", title="grupo")
+    ax.add_artist(l1)
+    ax.legend(handles=leg_c, fontsize=8, loc="lower right", title="condicao nominal")
+    v = info["variancia"]
+    ax.set_xlabel(f"PC1 ({v[0]:.0%} da variancia)")
+    ax.set_ylabel(f"PC2 ({v[1]:.0%} da variancia)" if len(v) > 1 else "PC2")
+    titulo_figura(plt, fig, "Os grupos no plano principal",
+                  "Cor e o grupo encontrado, forma e a condicao nominal. Sem os pares "
+                  "extremos, que distorceriam a escala.")
+    salvar(plt, fig, "05_pca.png")
 
 
 def _altura_corte(Z, k, np):
@@ -440,51 +671,83 @@ def _altura_corte(Z, k, np):
     alturas = np.sort(Z[:, 2])
     if k <= 1 or k > len(alturas) + 1:
         return alturas[-1] * 1.05
-    return (alturas[-k] + alturas[-k + 1]) / 2 if k > 1 else alturas[-1]
+    return (alturas[-k] + alturas[-k + 1]) / 2
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--grupos", type=int, default=None,
-                    help="forca o numero de grupos (por padrao, silhueta escolhe)")
+                    help="forca o numero de grupos (por padrao, silhueta + estabilidade)")
     ap.add_argument("--sem-graficos", action="store_true")
     a = ap.parse_args()
 
     mods = checar()
-    pd = mods["pandas"]
+    np, pd = mods["numpy"], mods["pandas"]
     SAIDA.mkdir(parents=True, exist_ok=True)
 
     p("Grupos de comportamento medido")
     p("=" * 60)
     df = pd.read_csv(ENTRADA)
+    if not set(CURVA).issubset(df.columns):
+        p("ERRO: features_curvas.csv e de uma versao anterior, sem a janela comum.")
+        p("    Rode antes: python src/curvas.py --remontar")
+        sys.exit(1)
+
     perfil = perfis(mods, df)
     p(f"  {len(perfil)} pares bateria x condicao com pelo menos "
       f"{MIN_DESCARGAS} descargas nos {CICLOS_INICIO} primeiros ciclos")
 
-    X, nomes_attr = matriz(mods, perfil)
-    p(f"  vetor de atributos: {len(ATRIBUTOS)} magnitudes + "
-      f"{N_CURVA} pontos de curva (reescalados para pesar como {len(ATRIBUTOS)})")
+    ext = extremos(mods, perfil)
+    perfil["extremo"] = ext
+    normais = ~ext
+    p(f"  {int(ext.sum())} pares extremos (escore-z modificado > {Z_EXTREMO}), "
+      f"grupo a parte: " + ", ".join(f"{r.battery_id} {r.condicao}"
+                                     for r in perfil[ext].itertuples()))
 
-    Z, rotulos, k, tabela = agrupar(mods, X, a.grupos)
-    perfil["grupo"] = rotulos
+    X, info = matriz(mods, perfil[normais].reset_index(drop=True))
+    p(f"  atributos mantidos: {', '.join(info['mantidos'])} + curva c00..c49")
+    for col, par, r in info["removidos"]:
+        p(f"  removido por redundancia: {col} (r = {r:+.3f} com {par})")
+    p(f"  PCA: {X.shape[1]} componentes retem "
+      f"{info['variancia'].sum():.1%} da variancia "
+      f"({', '.join(f'{v:.1%}' for v in info['variancia'])})")
+    for j in range(X.shape[1]):
+        pesos = sorted(zip(info["nomes_carga"], info["carga_pc"][:, j]),
+                       key=lambda t: -abs(t[1]))[:3]
+        p(f"    PC{j + 1}: " + ", ".join(f"{n} {w:+.2f}" for n, w in pesos))
+
+    tab = avaliar(mods, X, perfil[normais].reset_index(drop=True))
+    k = escolher_k(tab, a.grupos)
+
+    perfil["grupo"] = 0
+    perfil.loc[normais, "grupo"] = ward(X, k)
+    perfil.loc[ext, "grupo"] = k + 1
     nomes = nomear(mods, perfil)
     perfil["grupo_comportamento"] = perfil.grupo.map(nomes)
 
     cont = relatar(mods, perfil, nomes)
-    veredito(mods, perfil, cont, nomes)
+    val = validar(mods, perfil, X, normais, k)
+    veredito(mods, perfil, nomes)
 
-    saida = perfil[["battery_id", "condicao", "grupo", "grupo_comportamento",
-                    "descargas_inicio", "descargas_total", "carga_Ah",
-                    "energia_Wh", "duracao_s", "queda_V", "T_subida"]]
+    saida = perfil[["battery_id", "condicao", "descarga", "corte_V", "grupo", "grupo_comportamento",
+                    "extremo", "descargas_inicio", "descargas_total",
+                    "energia_Wh_comum", "carga_Ah_comum", "duracao_s_comum",
+                    "V_medio_comum", "T_subida_comum", "fracao_energia_1a_metade_comum"]]
     saida.to_csv(SAIDA / "grupos_comportamento.csv", index=False)
     cont.to_csv(SAIDA / "contingencia.csv")
+    tab.to_csv(SAIDA / "escolha_de_k.csv", index=False)
+    val.to_csv(SAIDA / "validacao.csv", index=False)
     p("")
-    p(f"  {(SAIDA / 'grupos_comportamento.csv').relative_to(RAIZ)}")
-    p(f"  {(SAIDA / 'contingencia.csv').relative_to(RAIZ)}")
+    for nome in ("grupos_comportamento.csv", "contingencia.csv",
+                 "escolha_de_k.csv", "validacao.csv"):
+        p(f"  {(SAIDA / nome).relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         p("")
-        desenhar(mods, estilo(mods), perfil, Z, k, tabela, cont, nomes)
+        antigo = SAIDA / "04_silhueta.png"
+        if antigo.exists():
+            antigo.unlink()          # substituido por 04_escolha_de_k.png
+        desenhar(mods, estilo(mods), perfil, normais, X, info, k, tab, cont, nomes)
 
 
 if __name__ == "__main__":
