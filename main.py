@@ -86,6 +86,11 @@ ETAPAS = [
     ("carga", "carga.py", [],
      "saida_nasa/carga/features_carga.csv", ["--remontar"],
      "a carga como processo proprio"),
+    # Le so a saida de normalizar.py, mas fica no fim: ali qualquer etapa que
+    # rode antes dela a dispara, e ela nao dispara ninguem.
+    ("classificacao", "classificacao.py", [],
+     "saida_nasa/classificacao/teste.csv", [],
+     "fim de vida por kNN, contra as familias da literatura"),
 ]
 
 NOMES = [e[0] for e in ETAPAS]

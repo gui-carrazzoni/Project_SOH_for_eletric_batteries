@@ -31,7 +31,7 @@ falta.
 
 ```
 main.py                    orquestrador: roda a cadeia, pula o que já está feito
-src/                       os 13 scripts, cada um executável sozinho
+src/                       os 14 scripts, cada um executável sozinho
 cleaned_nasa_dataset/      os dados (não versionados, reconstruídos pelo script)
 manifesto_nasa.csv.gz      as impressões digitais que verificam os dados
 saida_nasa/                tudo que a análise produz
@@ -42,6 +42,7 @@ saida_nasa/                tudo que a análise produz
 ├── normalizado/           divisão por bateria, referência de vida, escala
 ├── curvas/                áreas e forma da descarga, mais o mapa de calor
 ├── carga/                 a carga como processo próprio
+├── classificacao/         fim de vida por kNN, contra as famílias da literatura
 └── cluster/               tudo que é agrupamento
     ├── agrupamento/                          grupos descobertos no dado
     ├── grupo_corrente_temperatura/           esquema sem a tensão de corte
@@ -82,11 +83,13 @@ python src/curvas.py --remontar
 python src/capacidade.py --sem-corte
 ```
 
-Os sete últimos scripts da cadeia vieram de uma revisão com um profissional de
-baterias. Seis deles formam um encadeamento: `curvas.py` lê as descargas brutas
-uma vez e os outros trabalham sobre o cache que ele deixa. `carga.py` é
-independente — tem cache próprio e lê os ensaios de carga, que nenhum outro
-script toca.
+Os sete scripts de `curvas.py` a `carga.py` vieram de uma revisão com um
+profissional de baterias. Seis deles formam um encadeamento: `curvas.py` lê as
+descargas brutas uma vez e os outros trabalham sobre o cache que ele deixa.
+`carga.py` é independente — tem cache próprio e lê os ensaios de carga, que
+nenhum outro script toca. `classificacao.py` fecha a cadeia: lê só a saída de
+`normalizar.py`, mas fica por último para que nada que rode depois dela precise
+ser refeito.
 
 ## `preparar_dados.py`
 
@@ -408,6 +411,10 @@ ficam com `2 A / 4 C`, não com as outras de 1 A. Em B0041 há explicação: ela
 chega a `1 A / 4 C` depois de 42 ciclos a `4 A / 4 C`, já gasta. B0045 entra
 nova, e o agrupamento não explica por que ela destoa.
 
+`ajustar()` refaz esse agrupamento com k fixo usando só parte dos pares e
+encaixa os demais no grupo de centroide mais próximo. É o que `classificacao.py`
+usa na variante pós-hoc; as saídas deste script não mudam.
+
 ## `capacidade.py` e `modelos_area.py`
 
 ```bash
@@ -594,6 +601,221 @@ marcados na coluna `alerta`.
 | `04_janela_CC_por_ciclo.png` | o tempo na janela fixa ao longo dos ciclos, por grupo |
 | `05_ranking_vs_soh.png` | agrupada contra intra-célula, quase-capacidade em vermelho |
 | `06`, `07` | mapas de calor, agrupado e intra-célula |
+
+## `classificacao.py`
+
+```bash
+python src/classificacao.py                    # k na validação, avaliação no teste
+python src/classificacao.py --k 25             # força k
+python src/classificacao.py --sem-referencias  # só o kNN, sem as famílias da literatura
+python src/classificacao.py --sem-graficos     # só as tabelas
+```
+
+Escreve `saida_nasa/classificacao/`, em 1 a 2 min (quase tudo Random Forest e
+Gradient Boosting; com `--sem-referencias` são poucos segundos). Cada descarga
+vira **fim de vida** (SOH < 80%, o limiar do artigo) ou **saudável**, e quem
+decide é o **kNN**: as k descargas de treino mais próximas no espaço padronizado
+dos atributos, distância euclidiana, voto por maioria, k ímpar para não empatar.
+
+**Por que kNN.** O kNN não tem parâmetro treinado, e cada
+previsão vem com os vizinhos que a decidiram: `predicoes_teste.csv` lista os três
+mais próximos de cada descarga de teste, com célula, ciclo e SOH, para quem
+conhece bateria conferir.
+
+**O que entra.** Os atributos relativos ao início de vida de `normalizar.py` (as
+colunas `_rel`), mais temperatura ambiente, corrente e ciclo. Os conjuntos bruto
+e completo rodam ao lado, para medir o efeito. As classes já vêm quase
+equilibradas — 43,7% de fim de vida no treino, 47,4% no teste —, e a métrica é a
+acurácia balanceada, em que o acaso vale 50%.
+
+**Validação deixando uma célula de fora**, nas 25 de treino. A coluna `fold` de
+`normalizar.py` fica de lado: o contador de folds recomeça a cada condição, e os
+cinco folds saíram com 8, 7, 6, 3 e 1 células — o último com 24 descargas, 96%
+delas em fim de vida. Imputação e escala são refeitas a cada rodada, só com as
+células que ficaram no treino.
+
+**k = 25: o menor equivalente ao melhor.** Com os atributos relativos a curva
+forma um platô — de k = 15 a k = 101 fica tudo entre 78% e 80% — e cai depois
+de k ≈ 100 (73% em k = 201), quando a vizinhança vira média regional. O máximo,
+80,0% em k = 101, é um pico isolado na borda da queda. Vence o menor k a até
+1 p.p. do máximo, a mesma lógica de `grupos.py`, que fica com o menor candidato.
+
+### Validação: protocolo, atributos e algoritmo
+
+| acurácia balanceada | brutos | relativos | todos | relativos, partição aleatória |
+|---|---|---|---|---|
+| **kNN** | 72,0% (k = 15) | **79,4%** (k = 25) | 76,5% (k = 5) | 92,1% |
+| SVM (RBF) | 74,0% | 79,0% | 73,1% | 92,9% |
+| Gradient Boosting | 67,2% | 76,3% | 76,5% | 96,6% |
+| Random Forest | 60,0% | 73,6% | 67,3% | 95,8% |
+| Regressão logística | 69,2% | 67,9% | 62,1% | 85,9% |
+
+1. **Protocolo.** A partição aleatória por descarga, que põe a mesma célula dos
+   dois lados, soma de 13 a 22 p.p. e leva todos para 86% a 97%. No kNN
+   o mecanismo fica à vista: com ela, o vizinho mais próximo de uma descarga é
+   da mesma célula em 90% dos casos (`vazamento.csv`). O modelo reconhece a
+   célula em vez de medir a degradação — é o vazamento que o artigo aponta em
+   [13].
+2. **Atributos.** Trocar brutos por relativos soma de 5 a 14 p.p. aos modelos
+   não lineares; a logística perde 1.
+3. **Algoritmo.** Com os atributos relativos, kNN e SVM ficam a 0,5 p.p. um do
+   outro.
+
+### Teste: as 8 células, avaliadas uma vez
+
+| teste | acurácia balanceada | IC 95% | sensibilidade | especificidade | diferença para o kNN (IC 95% pareado) |
+|---|---|---|---|---|---|
+| **kNN (k = 25)** | 73,6% | 52–85% | 51,2% | 96,0% | — |
+| Regressão logística | 84,1% | 75–94% | 90,6% | 77,5% | +10,4 p.p. (−2,6 a +36,7) |
+| SVM (RBF) | 80,3% | 67–88% | 64,1% | 96,6% | +6,7 p.p. (−0,7 a +23,4) |
+| Random Forest | 76,8% | 69–87% | 64,7% | 88,9% | +3,2 p.p. (−10,0 a +26,6) |
+| Gradient Boosting | 83,2% | 73–90% | 77,1% | 89,4% | +9,6 p.p. (+1,7 a +25,6) |
+
+Os intervalos vêm de reamostrar células inteiras, não descargas: descargas
+seguidas da mesma célula são quase cópias, e reamostrá-las uma a uma daria um
+intervalo estreito demais. Todos os modelos passam pelas mesmas reamostragens,
+então a diferença para o kNN é medida em pares.
+
+**No teste o kNN fica em último**, e a fraqueza é a sensibilidade: deixa passar
+49% das descargas em fim de vida. Os erros se concentram em três células — em
+B0018 (2 A / 24 °C) as 58 descargas abaixo de 80% passam como saudáveis, em
+B0054 (2 A / 4 °C) 45 de 50, em B0042 a 4 A / 4 °C 19 de 23 —, e 65% dos 181
+erros ficam a menos de 5 p.p. do limiar. São descargas logo abaixo de 80% que o
+kNN ainda vê como saudáveis.
+
+**A ordem dos algoritmos não se sustenta entre validação e teste.** O kNN é o
+1º de 5 na validação e o 5º no teste; a logística faz o caminho inverso, de
+último (67,9%) a primeiro (84,1%). Na validação o kNN tinha a *melhor*
+sensibilidade (71,6%) e a logística a pior (51,4%); no teste, 51,2% e 90,6%. O
+que muda é quais células estão sendo avaliadas: o acerto do kNN por célula de
+treino vai de 33% a 100%. Com 8 células de teste, a variação entre células pesa
+mais que a diferença entre algoritmos.
+
+**Medida em pares, só a diferença para o Gradient Boosting exclui o zero**
+(+9,6 p.p.), e continua excluindo com a correção de Bonferroni para as quatro
+comparações (+0,6 a +29,0 p.p.). Para as outras três referências o teste não
+separa os modelos.
+
+**O que isso diz para o artigo.** A hierarquia da validação — protocolo (13 a
+22 p.p.) > atributos (até 14 p.p.) > algoritmo — sai mais forte, não mais fraca:
+o efeito do protocolo é sistemático, e o do algoritmo nem mantém a ordem de um
+conjunto de células para outro. O kNN não é o melhor classificador para células
+novas: empata com as famílias da literatura na validação e fica abaixo do
+Gradient Boosting no teste.
+
+### AUC: a ordem dos escores, em todos os limiares
+
+A acurácia balanceada avalia a decisão, com o voto cortado em 50%. A AUC avalia
+se o escore põe as descargas em fim de vida acima das saudáveis, qualquer que
+seja o limiar. O escore é a fração de vizinhos em fim de vida no kNN, a
+probabilidade na logística, no Random Forest e no Gradient Boosting, e a função
+de decisão no SVM. Na validação, os escores das 25 rodadas são juntados antes
+do cálculo, porque a AUC de uma célula sozinha não existe quando ela tem uma
+classe só. A AUC entrou depois do teste e não escolhe nada.
+
+| AUC | validação, relativos | validação, partição aleatória | teste (IC 95% por células) | diferença para o kNN no teste (IC 95% pareado) |
+|---|---|---|---|---|
+| **kNN (k = 25)** | 0,834 | 0,984 | 0,826 (0,66–0,92) | — |
+| Regressão logística | 0,696 | 0,919 | 0,870 (0,79–0,97) | +0,045 (−0,084 a +0,260) |
+| SVM (RBF) | 0,853 | 0,975 | 0,950 (0,91–0,98) | +0,125 (+0,026 a +0,308) |
+| Random Forest | 0,824 | 0,994 | 0,902 (0,83–0,97) | +0,076 (−0,031 a +0,294) |
+| Gradient Boosting | 0,828 | 0,995 | 0,909 (0,86–0,96) | +0,083 (+0,006 a +0,235) |
+
+- **O kNN também ordena pior.** No teste, a AUC dele é a menor. Só a diferença
+  para o SVM resiste à correção de Bonferroni (+0,004 a +0,360); a do Gradient
+  Boosting exclui o zero sem a correção, mas não com ela.
+- **O SVM ordena bem e decide mal.** Tem a melhor AUC no teste (0,95), mas no
+  limiar padrão detecta só 64% do fim de vida: o que o segura é o limiar, não a
+  ordem. No kNN são as duas coisas. Na validação, o SVM já ficava à frente na
+  AUC (0,853 contra 0,834), embora empatasse na acurácia balanceada.
+- **O protocolo continua dominando.** Com a partição aleatória, a AUC de todos
+  sobe para 0,92 a 0,995.
+
+### F1: a qualidade do alarme de fim de vida
+
+O F1 é a média harmônica entre a precisão (dos alarmes, quantos eram fim de
+vida) e a sensibilidade (do fim de vida, quanto foi detectado). Sai com o mesmo
+intervalo por células e a mesma comparação em pares da acurácia balanceada.
+
+| F1 (fim de vida) | validação, relativos | validação, partição aleatória | teste (IC 95% por células) | precisão no teste | diferença para o kNN no teste (IC 95% pareado) |
+|---|---|---|---|---|---|
+| **kNN (k = 25)** | 0,762 | 0,912 | 0,658 (0,09–0,85) | 0,921 | — |
+| Regressão logística | 0,599 | 0,841 | 0,840 (0,65–0,94) | 0,784 | +0,183 (−0,005 a +0,722) |
+| SVM (RBF) | 0,755 | 0,923 | 0,764 (0,51–0,87) | 0,944 | +0,106 (−0,012 a +0,562) |
+| Random Forest | 0,680 | 0,954 | 0,731 (0,58–0,85) | 0,840 | +0,073 (−0,115 a +0,620) |
+| Gradient Boosting | 0,721 | 0,963 | 0,816 (0,61–0,90) | 0,868 | +0,158 (+0,022 a +0,597) |
+
+- **O alarme do kNN é preciso, mas raro.** Quando dispara, acerta 92% das
+  vezes; mas só dispara para 51% do fim de vida. O F1 dele, 0,66, é o menor do
+  teste. Na validação, o padrão é o da acurácia balanceada: kNN e SVM empatam
+  (0,762 e 0,755).
+- **Com 8 células, o F1 é a métrica menos estável.** O intervalo do kNN vai de
+  0,09 a 0,85. O F1 ignora as saudáveis reconhecidas e depende de quais células
+  com fim de vida caem na reamostragem: sem B0018 e B0054, o F1 do kNN no teste
+  seria 0,82; nas reamostragens em que elas se repetem, cai abaixo de 0,1.
+  Nenhuma diferença de F1 resiste à
+  correção de Bonferroni; só a do Gradient Boosting exclui o zero sem ela.
+- **Por isso o F1 complementa a acurácia balanceada, mas não a substitui**: ele
+  também muda com a proporção de fim de vida, que difere entre treino (44%) e
+  teste (47%).
+
+### Variante pós-hoc: vizinhos só do mesmo grupo de comportamento
+
+Na análise dos erros do teste, mais da metade dos vizinhos que enganaram B0018
+vinha de outros grupos do agrupamento do módulo 2. A variante restringe a
+vizinhança ao grupo da descarga. Para que nem os grupos vejam a célula
+avaliada, `grupos.ajustar()` refaz o agrupamento a cada rodada só com as
+células de treino — mesmos atributos, extremos à parte, PCA e Ward com o k = 6
+do módulo 2 —, e os pares da célula deixada de fora entram no grupo de
+centroide mais próximo. Ajustado em todos os pares, `ajustar()` reproduz
+exatamente os grupos de `grupos.py`; o encaixe pelo centroide discorda do Ward
+em 1 dos 47 pares (B0040 a 2 A / 44 °C, na fronteira entre dois grupos).
+
+Como a ideia surgiu de olhar o teste, só a validação a avalia, e ela **piora em
+todos os 17 valores de k**. No k escolhido pela mesma regra (k = 3), a acurácia
+balanceada cai de 79,4% para 66,3%, e a sensibilidade de 71,6% para 46,8%. O
+motivo é o tamanho dos grupos: dentro do grupo, cada descarga encontra em
+mediana só 7 células como vizinhas (de 1 a 8), contra 24 sem a restrição, e o
+kNN passa a depender do comportamento de poucas irmãs — o mesmo mecanismo que
+derrubou B0054 no teste. A maior queda é de B0036, de 89% para 13% de acerto:
+dentro do grupo os vizinhos dela são saudáveis, e o kNN passa a contrariar o
+rótulo dela, que é o artificial.
+
+A variante não entra no modelo e não foi avaliada no teste.
+
+**Cuidados:**
+
+- **Ajustar o kNN agora contamina o teste.** Peso por distância ou limiar de voto
+  abaixo de 50% atacariam a sensibilidade, mas qualquer mudança feita depois de
+  ver o teste deixa de ser avaliação independente, e isso teria de ir declarado
+  no artigo.
+- **Parte dos erros é do rótulo, não do kNN.** As descargas 0 e 2 de B0039 a
+  4 A / 24 °C marcam SOH de 25% e 34% numa célula que entrega 86% a 100% nas
+  outras — leituras isoladas, como as que a análise descritiva já aponta. Em
+  B0042 a 4 A / 4 °C o SOH salta de uma descarga para a seguinte (de 80% para
+  88%, de 90% para 78%): nessa condição a capacidade mediana é de 0,062 Ah, e o
+  SOH vira razão entre capacidades minúsculas.
+- **Na validação o kNN leva uma pequena vantagem**, porque o k foi escolhido nela
+  e as referências usam o padrão. No teste isso não favorece ninguém: o k saiu
+  só do treino.
+
+| | |
+|---|---|
+| `escolha_de_k.csv` | acurácia balanceada por k, nos três conjuntos de atributos |
+| `comparacao.csv` | modelo × atributos × validação (por célula e aleatória): acurácia balanceada, sensibilidade, especificidade, F1, AUC e o k do kNN |
+| `vazamento.csv` | de onde vêm os vizinhos na partição aleatória |
+| `validacao_por_celula.csv` | o acerto do kNN em cada célula de treino, quando ela é a deixada de fora, com e sem a restrição ao grupo |
+| `variante_mesmo_grupo.csv` | acurácia balanceada por k, com e sem a restrição ao grupo de comportamento |
+| `teste.csv` | métricas no teste, IC por reamostragem de células e diferença pareada para o kNN em acurácia balanceada, AUC e F1, com e sem Bonferroni |
+| `teste_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula |
+| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram |
+| `01_escolha_de_k.png` | a curva de k nos três conjuntos, com a faixa de equivalência |
+| `02_protocolo_atributos_algoritmo.png` | o efeito do protocolo, dos atributos e do algoritmo na validação |
+| `03_teste_comparacao.png` | o teste com IC ao lado da validação, por algoritmo |
+| `04_matriz_confusao.png` | a matriz de confusão do kNN no teste |
+| `05_teste_por_celula.png` | SOH contra ciclo em cada célula de teste, com os erros marcados |
+| `06_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
+| `07_curvas_roc.png` | as curvas ROC dos cinco modelos no teste, com a AUC e o ponto de operação do kNN |
 
 
 ## O que os dados exigem cuidado

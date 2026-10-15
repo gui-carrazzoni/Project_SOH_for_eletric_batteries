@@ -187,19 +187,22 @@ def protocolo():
     return PROTOCOLO
 
 
-def extremos(mods, perfil):
+def extremos(mods, perfil, ref=None):
     """Pares cujas magnitudes ficam longe demais do resto.
 
     Escore-z modificado, 0,6745 (x - mediana) / MAD, sobre o log das tres
     areas. Mediana e MAD nao se deixam puxar pelo proprio extremo, ao contrario
     de media e desvio padrao — que e justamente o problema que se quer evitar.
+    `ref` sao os pares que definem mediana e MAD; por padrao, os proprios.
     """
     np = mods["numpy"]
+    ref = perfil if ref is None else ref
     marca = np.zeros(len(perfil), dtype=bool)
     for col in MAGNITUDES:
         x = np.log10(np.clip(perfil[col].to_numpy(float), 1e-6, None))
-        med = np.median(x)
-        mad = np.median(np.abs(x - med))
+        xr = np.log10(np.clip(ref[col].to_numpy(float), 1e-6, None))
+        med = np.median(xr)
+        mad = np.median(np.abs(xr - med))
         if mad > 0:
             marca |= np.abs(0.6745 * (x - med) / mad) > Z_EXTREMO
     return marca
@@ -218,11 +221,12 @@ def matriz(mods, perfil):
     4. PCA retendo VARIANCIA_PCA da variancia.
     """
     np = mods["numpy"]
-    blocos = {}
+    blocos, escala = {}, {}
     for col, usar_log in ATRIBUTOS:
         x = perfil[col].to_numpy(float)
         if usar_log:
             x = np.log10(np.clip(x, 1e-6, None))
+        escala[col] = (x.mean(), x.std())
         blocos[col] = _z(np, x)
 
     mantidos, removidos = [], []
@@ -237,17 +241,32 @@ def matriz(mods, perfil):
 
     mag = np.column_stack([blocos[c] for c in mantidos])
     curva = perfil[CURVA].to_numpy(float)
-    curva = curva - curva.mean(0)
+    media_curva = curva.mean(0)
+    curva = curva - media_curva
     var_curva = (curva ** 2).sum() / len(curva)
-    if var_curva > 0:
-        curva *= np.sqrt(len(mantidos) / var_curva)
+    fator_curva = np.sqrt(len(mantidos) / var_curva) if var_curva > 0 else 1.0
+    curva *= fator_curva
     X = np.hstack([mag, curva])
 
-    X = X - X.mean(0)
+    media_X = X.mean(0)
+    X = X - media_X
     U, S, Vt = np.linalg.svd(X, full_matrices=False)
     ev = S ** 2 / (S ** 2).sum()
     q = int(np.searchsorted(np.cumsum(ev), VARIANCIA_PCA) + 1)
     escores = U[:, :q] * S[:q]
+
+    def projetar(novos):
+        """Os mesmos passos, com os parametros deste ajuste, para pares de fora dele."""
+        usar_log = dict(ATRIBUTOS)
+        cols = []
+        for col in mantidos:
+            x = novos[col].to_numpy(float)
+            if usar_log[col]:
+                x = np.log10(np.clip(x, 1e-6, None))
+            m, s = escala[col]
+            cols.append((x - m) / s if s > 0 else x * 0.0)
+        cur = (novos[CURVA].to_numpy(float) - media_curva) * fator_curva
+        return (np.hstack([np.column_stack(cols), cur]) - media_X) @ Vt[:q].T
 
     # Quanto cada atributo pesa nas componentes retidas, para o relatorio dizer
     # o que cada eixo do PCA esta medindo.
@@ -255,7 +274,8 @@ def matriz(mods, perfil):
     carga_pc = np.vstack([Vt[:q, :len(mantidos)].T,
                           np.sqrt((Vt[:q, len(mantidos):] ** 2).sum(1))])
     info = {"mantidos": mantidos, "removidos": removidos,
-            "variancia": ev[:q], "nomes_carga": nomes, "carga_pc": carga_pc}
+            "variancia": ev[:q], "nomes_carga": nomes, "carga_pc": carga_pc,
+            "projetar": projetar}
     return escores, info
 
 
@@ -320,6 +340,32 @@ def nmi(mods, a, b):
 def ward(X, k):
     from scipy.cluster.hierarchy import linkage, fcluster
     return fcluster(linkage(X, method="ward"), k, criterion="maxclust")
+
+
+def ajustar(mods, perfil, k):
+    """O agrupamento deste script com k fixo, e quem encaixa pares novos nele.
+
+    Para quem precisa refazer os grupos so com parte dos pares:
+    classificacao.py os refaz a cada rodada da validacao so com as celulas de
+    treino, para que nem os grupos tenham visto a celula avaliada. Devolve o
+    grupo de cada par de `perfil` (0 = extremo) e uma funcao que encaixa pares
+    novos: extremo pela mediana e MAD de `perfil`, senao o grupo de centroide
+    mais proximo no espaco do PCA ajustado aqui.
+    """
+    np = mods["numpy"]
+    ext = extremos(mods, perfil)
+    X, info = matriz(mods, perfil[~ext].reset_index(drop=True))
+    rot = np.zeros(len(perfil), dtype=int)
+    rot[~ext] = ward(X, k)
+    gs = np.unique(rot[~ext])
+    centros = np.vstack([X[rot[~ext] == g].mean(0) for g in gs])
+
+    def encaixar(novos):
+        Z = info["projetar"](novos)
+        perto = gs[((Z[:, None, :] - centros[None]) ** 2).sum(-1).argmin(1)]
+        return np.where(extremos(mods, novos, ref=perfil), 0, perto)
+
+    return rot, encaixar
 
 
 def kmeans(mods, X, k, reinicios=20):
