@@ -8,9 +8,10 @@ Pre-processamento da tabela de atributos: limpeza, faltantes e redundancia.
     python limpeza.py --grupo-minimo 5 # aceita grupos mais curtos
     python limpeza.py --podar          # remove tambem os pares redundantes
 
-Le saida_nasa/correlacao/atributos_descargas.csv e escreve em
-saida_nasa/preprocessado/: a tabela pronta para a normalizacao, o relatorio de
-tudo que foi decidido e o mapa de faltantes.
+Le saida_nasa/correlacao/tabelas/tabela_modelagem.csv e escreve em
+saida_nasa/preprocessado/: a tabela pronta para a normalizacao e o relatorio de
+tudo que foi decidido em tabelas/, e o mapa de faltantes em figuras/, quando ha
+falta para mostrar.
 
 **Nao normaliza e nao imputa.** Escalonamento e imputacao dependem da divisao
 treino/teste (ajustar no conjunto inteiro vaza informacao do teste), entao ficam
@@ -51,8 +52,9 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "correlacao" / "tabela_modelagem.csv"
+ENTRADA = RAIZ / "saida_nasa" / "correlacao" / "tabelas" / "tabela_modelagem.csv"
 SAIDA = RAIZ / "saida_nasa" / "preprocessado"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -304,7 +306,8 @@ def mapa_faltantes(mods, plt, bruto, nome):
              "antes de imputar.",
              fontsize=10.5, color=INK2, ha="left", va="top")
     fig.tight_layout(rect=[0, 0, 1, 0.90])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -324,7 +327,7 @@ def main():
 
     mods = checar()
     pd = mods["pandas"]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     bruto = pd.read_csv(ENTRADA)
     rel = Relatorio()
 
@@ -344,12 +347,12 @@ def main():
     rel.item("baterias", df.battery_id.nunique())
     rel.item("proxima etapa", "normalizacao, ajustada so no treino")
 
-    df.to_csv(SAIDA / "dados_modelagem.csv", index=False)
+    df.to_csv(TABELAS / "dados_modelagem.csv", index=False)
     p(f"  dados_modelagem.csv  ({len(df)} x {len(df.columns)})")
     if not pares.empty:
-        pares.to_csv(SAIDA / "pares_redundantes.csv", index=False)
+        pares.to_csv(TABELAS / "pares_redundantes.csv", index=False)
         p("  pares_redundantes.csv")
-    rel.escrever(SAIDA / "relatorio_preprocessamento.txt")
+    rel.escrever(TABELAS / "relatorio_preprocessamento.txt")
     p("  relatorio_preprocessamento.txt")
 
     if not args.sem_graficos:

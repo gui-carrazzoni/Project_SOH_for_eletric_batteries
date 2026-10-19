@@ -6,7 +6,8 @@ Mapa de calor da correlacao, ja com as areas e os descritores de forma.
     python mapa_calor.py
     python mapa_calor.py --sem-graficos
 
-Escreve saida_nasa/curvas/correlacao/.
+Escreve saida_nasa/curvas/correlacao/: as tabelas em tabelas/, os mapas em
+figuras/.
 
 `correlacao_soh.py` ja produz o mapa de calor das variaveis da Tabela 2 do
 artigo, e este script **nao o substitui**: aquele e fiel ao dicionario de dados
@@ -43,8 +44,9 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "curvas" / "features_curvas.csv"
+ENTRADA = RAIZ / "saida_nasa" / "curvas" / "tabelas" / "features_curvas.csv"
 SAIDA = RAIZ / "saida_nasa" / "curvas" / "correlacao"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 SURF, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e3e2de"
 FOGO = "#b93331"
@@ -186,7 +188,8 @@ def mapa(mods, plt, m, nome, titulo, sub):
              "capacidade por outro nome, e o SOH deriva dela.",
              fontsize=9, color=FOGO, ha="left", va="bottom")
     fig.tight_layout(rect=[0, 0.02, 1, 0.955 - 0.016 * len(linhas)])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -197,7 +200,7 @@ def main():
     a = ap.parse_args()
 
     mods = checar()
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     p("Mapa de calor com as areas e a forma da descarga")
     p("=" * 60)
 
@@ -208,9 +211,9 @@ def main():
     agrupada, intra = matrizes(mods, d, cols)
     rank = ranking(mods, agrupada, intra)
 
-    agrupada.to_csv(SAIDA / "matriz_agrupada.csv")
-    intra.to_csv(SAIDA / "matriz_intracelula.csv")
-    rank.to_csv(SAIDA / "ranking_vs_soh.csv")
+    agrupada.to_csv(TABELAS / "matriz_agrupada.csv")
+    intra.to_csv(TABELAS / "matriz_intracelula.csv")
+    rank.to_csv(TABELAS / "ranking_vs_soh.csv")
 
     p("")
     p("  correlacao com o SOH, sem as vazadas no topo:")
@@ -221,7 +224,7 @@ def main():
           f"{r.correlacao_intracelula:>13.3f}{marca}")
 
     p("")
-    p(f"  {(SAIDA / 'ranking_vs_soh.csv').relative_to(RAIZ)}")
+    p(f"  {(TABELAS / 'ranking_vs_soh.csv').relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         plt = estilo(mods)

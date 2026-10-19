@@ -8,7 +8,7 @@ A carga como processo proprio, uma linha por ensaio de carga.
     python carga.py --amostra 100   # teste rapido
     python carga.py --sem-graficos
 
-Escreve saida_nasa/carga/.
+Escreve saida_nasa/carga/: as tabelas em tabelas/, os graficos em figuras/.
 
 **O projeto inteiro, ate aqui, olhou so para a descarga.** O dataset tem 2.815
 ensaios de carga contra 2.794 de descarga, cobrindo as 34 celulas, e nenhum
@@ -115,8 +115,9 @@ from pathlib import Path
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
 DADOS = RAIZ / "cleaned_nasa_dataset"
-DESCARGAS = RAIZ / "saida_nasa" / "metricas_descargas.csv"
+DESCARGAS = RAIZ / "saida_nasa" / "geral" / "tabelas" / "metricas_descargas.csv"
 SAIDA = RAIZ / "saida_nasa" / "carga"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -384,7 +385,7 @@ def extrair(c, np):
 # ---------------------------------------------------------------------------
 def montar(mods, remontar=False, amostra=None):
     np, pd = mods["numpy"], mods["pandas"]
-    cache = SAIDA / "features_carga.csv"
+    cache = TABELAS / "features_carga.csv"
     if cache.exists() and not remontar and amostra is None:
         p(f"  cache: {cache.relative_to(RAIZ)}")
         return pd.read_csv(cache)
@@ -453,7 +454,7 @@ def montar(mods, remontar=False, amostra=None):
     resto = [c for c in df.columns if c not in frente]
     df = df[frente + resto]
 
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     if amostra is None:
         df.to_csv(cache, index=False)
         p(f"  {cache.relative_to(RAIZ)}  ({len(df)} x {df.shape[1]})")
@@ -556,8 +557,8 @@ def resumir(mods, df, d):
         p(f"    {lin.condicao:<14} {lin.cargas:>5} {lin.celulas:>4} "
           f"{lin.carga_inj_Ah:>7.3f} {lin.t_cc_min:>7.1f} "
           f"{lin.t_cv_min:>7.1f} {jan:>9}")
-    g.to_csv(SAIDA / "resumo_por_condicao.csv")
-    p(f"\n  {(SAIDA / 'resumo_por_condicao.csv').relative_to(RAIZ)}")
+    g.to_csv(TABELAS / "resumo_por_condicao.csv")
+    p(f"\n  {(TABELAS / 'resumo_por_condicao.csv').relative_to(RAIZ)}")
 
 
 def relatar(rank):
@@ -857,9 +858,10 @@ def fig_mapa(mods, plt, m, nome, titulo, sub, saida):
 
 def desenhar(mods, d, agrupada, intra, rank):
     plt = estilo(mods)
+    FIGURAS.mkdir(parents=True, exist_ok=True)
     p("")
-    fig_curva_de_carga(mods, plt, d, SAIDA)
-    fig_ciclo_completo(mods, plt, d, SAIDA)
+    fig_curva_de_carga(mods, plt, d, FIGURAS)
+    fig_ciclo_completo(mods, plt, d, FIGURAS)
     fig_por_grupo(
         mods, plt, d, "Ah_cc", "carga aceita na fase CC (Ah)",
         "03_ah_cc_por_ciclo.png",
@@ -868,7 +870,7 @@ def desenhar(mods, d, agrupada, intra, rank):
         "analogo, do lado da carga, do Ah por ciclo que capacidade.py mede na "
         "descarga — e cai pelo mesmo motivo: a celula aceita menos carga antes de "
         "chegar a 4,2 V. Ao contrario da area de descarga, este numero nao e o alvo "
-        "por outro nome: ele e medido antes de a descarga acontecer.", SAIDA)
+        "por outro nome: ele e medido antes de a descarga acontecer.", FIGURAS)
     fig_por_grupo(
         mods, plt, d, "t_janela_CC_s",
         f"tempo de {JANELA_CC[0]:.2f} V a {JANELA_CC[1]:.2f} V (s)",
@@ -879,18 +881,18 @@ def desenhar(mods, d, agrupada, intra, rank):
         "faixa — uma capacidade parcial medida sempre na mesma janela, imune a quao "
         "descarregada a celula estava. E o atributo de carga que melhor acompanha o "
         "SOH (0,63 intra-celula). Paineis vazios ou ralos sao celulas que comecam a "
-        "carga acima de 3,90 V e nunca atravessam a janela.", SAIDA)
-    fig_ranking(mods, plt, rank, SAIDA)
+        "carga acima de 3,90 V e nunca atravessam a janela.", FIGURAS)
+    fig_ranking(mods, plt, rank, FIGURAS)
     fig_mapa(mods, plt, agrupada, "06_mapa_agrupado.png",
              "Correlacao agrupada — atributos de carga",
              "Todos os ensaios de carga juntos. Mistura a diferenca entre celulas com a "
              "degradacao dentro de cada uma, e por isso engana: compare com o mapa "
-             "intra-celula antes de concluir qualquer coisa daqui.", SAIDA)
+             "intra-celula antes de concluir qualquer coisa daqui.", FIGURAS)
     fig_mapa(mods, plt, intra, "07_mapa_intracelula.png",
              "Correlacao intra-celula — atributos de carga",
              "Cada atributo centrado na media da sua bateria x condicao antes de "
              "correlacionar. Remove o nivel proprio de cada celula e deixa so a variacao "
-             "ao longo da vida. E esta que manda.", SAIDA)
+             "ao longo da vida. E esta que manda.", FIGURAS)
 
 
 def main():
@@ -903,7 +905,7 @@ def main():
     a = ap.parse_args()
 
     mods = checar()
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     p("A carga como processo proprio")
     p("=" * 60)
 
@@ -913,12 +915,12 @@ def main():
 
     agrupada, intra = matrizes(mods, d, cols)
     rank = ranking(mods, d, agrupada, intra, cols)
-    agrupada.to_csv(SAIDA / "matriz_agrupada.csv")
-    intra.to_csv(SAIDA / "matriz_intracelula.csv")
-    rank.to_csv(SAIDA / "ranking_vs_soh.csv")
+    agrupada.to_csv(TABELAS / "matriz_agrupada.csv")
+    intra.to_csv(TABELAS / "matriz_intracelula.csv")
+    rank.to_csv(TABELAS / "ranking_vs_soh.csv")
     relatar(rank)
     p("")
-    p(f"  {(SAIDA / 'ranking_vs_soh.csv').relative_to(RAIZ)}")
+    p(f"  {(TABELAS / 'ranking_vs_soh.csv').relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         desenhar(mods, d, agrupada, intra, rank)

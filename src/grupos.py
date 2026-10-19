@@ -7,7 +7,8 @@ Grupos de comportamento medido, contra o rotulo nominal de condicao de ensaio.
     python grupos.py --grupos 5     # forca k=5
     python grupos.py --sem-graficos # so as tabelas
 
-Escreve saida_nasa/cluster/agrupamento/.
+Escreve saida_nasa/cluster/agrupamento/: as tabelas em tabelas/, os graficos em
+figuras/.
 
 Nao e justo comparar uma celula a 2 A / 24 C com outra a 4 A / 4 C: sao regimes
 de descarga distintos, e a diferenca entre eles engole a degradacao que se quer
@@ -75,8 +76,9 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "curvas" / "features_curvas.csv"
+ENTRADA = RAIZ / "saida_nasa" / "curvas" / "tabelas" / "features_curvas.csv"
 SAIDA = RAIZ / "saida_nasa" / "cluster" / "agrupamento"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -581,7 +583,8 @@ def titulo_figura(plt, fig, texto, sub):
 
 
 def salvar(plt, fig, nome):
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -729,7 +732,7 @@ def main():
 
     mods = checar()
     np, pd = mods["numpy"], mods["pandas"]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
 
     p("Grupos de comportamento medido")
     p("=" * 60)
@@ -779,20 +782,17 @@ def main():
                     "extremo", "descargas_inicio", "descargas_total",
                     "energia_Wh_comum", "carga_Ah_comum", "duracao_s_comum",
                     "V_medio_comum", "T_subida_comum", "fracao_energia_1a_metade_comum"]]
-    saida.to_csv(SAIDA / "grupos_comportamento.csv", index=False)
-    cont.to_csv(SAIDA / "contingencia.csv")
-    tab.to_csv(SAIDA / "escolha_de_k.csv", index=False)
-    val.to_csv(SAIDA / "validacao.csv", index=False)
+    saida.to_csv(TABELAS / "grupos_comportamento.csv", index=False)
+    cont.to_csv(TABELAS / "contingencia.csv")
+    tab.to_csv(TABELAS / "escolha_de_k.csv", index=False)
+    val.to_csv(TABELAS / "validacao.csv", index=False)
     p("")
     for nome in ("grupos_comportamento.csv", "contingencia.csv",
                  "escolha_de_k.csv", "validacao.csv"):
-        p(f"  {(SAIDA / nome).relative_to(RAIZ)}")
+        p(f"  {(TABELAS / nome).relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         p("")
-        antigo = SAIDA / "04_silhueta.png"
-        if antigo.exists():
-            antigo.unlink()          # substituido por 04_escolha_de_k.png
         desenhar(mods, estilo(mods), perfil, normais, X, info, k, tab, cont, nomes)
 
 

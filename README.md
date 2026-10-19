@@ -31,24 +31,43 @@ falta.
 
 ```
 main.py                    orquestrador: roda a cadeia, pula o que já está feito
-src/                       os 14 scripts, cada um executável sozinho
+src/                       os 15 scripts, cada um executável sozinho
 cleaned_nasa_dataset/      os dados (não versionados, reconstruídos pelo script)
 manifesto_nasa.csv.gz      as impressões digitais que verificam os dados
 saida_nasa/                tudo que a análise produz
-├── graficos/              os sete gráficos gerais
+├── geral/                 métricas por ensaio e os sete gráficos gerais
 ├── correlacao/            tabela da Tabela 2 e relevância dos atributos
 ├── preprocessado/         a tabela limpa, pronta para modelar
 ├── descritiva/            distribuições do alvo e da condição
 ├── normalizado/           divisão por bateria, referência de vida, escala
 ├── curvas/                áreas e forma da descarga, mais o mapa de calor
 ├── carga/                 a carga como processo próprio
-├── classificacao/         fim de vida por kNN, contra as famílias da literatura
+├── classificacao/         fim de vida: kNN e as famílias da literatura, lado a lado
+├── regressao/             SOH: GAM e as famílias da literatura, e o RUL
 └── cluster/               tudo que é agrupamento
     ├── agrupamento/                          grupos descobertos no dado
     ├── grupo_corrente_temperatura/           esquema sem a tensão de corte
     ├── grupo_corrente_temperatura_corte/     esquema com a tensão de corte
     └── comparacao/                           qual dos dois esquemas ganha
 ```
+
+**Dentro de cada pasta, tabelas e figuras ficam separadas**: os CSVs em
+`tabelas/`, os PNGs em `figuras/`. Uma pasta sem gráfico só tem `tabelas/`.
+As figuras de classificação e regressão são numeradas na ordem do artigo —
+validação, teste de todos os algoritmos, o modelo proposto em detalhe e, na
+regressão, o RUL. Algumas tabelas não são resultado, e sim a entrada da etapa
+seguinte; ficam em `tabelas/` como as outras:
+
+| tabela | quem gera | quem lê |
+|---|---|---|
+| `geral/tabelas/metricas_descargas.csv` | `graficos_nasa.py` | `correlacao_soh.py`, `curvas.py`, `carga.py` |
+| `correlacao/tabelas/tabela_modelagem.csv` | `correlacao_soh.py` | `limpeza.py`, `descritiva.py` |
+| `preprocessado/tabelas/dados_modelagem.csv` | `limpeza.py` | `descritiva.py`, `normalizar.py`, `classificacao.py`, `regressao.py` |
+| `normalizado/tabelas/dados_normalizados.csv` | `normalizar.py` | `classificacao.py`, `regressao.py` |
+| `normalizado/tabelas/parametros_escala.csv` | `normalizar.py` | `regressao.py` |
+| `curvas/tabelas/features_curvas.csv` | `curvas.py` | `grupos.py`, `capacidade.py`, `modelos_area.py`, `mapa_calor.py`, `classificacao.py` |
+| `cluster/agrupamento/tabelas/grupos_comportamento.csv` | `grupos.py` | `classificacao.py` |
+| `cluster/<esquema>/capacidade/tabelas/` e `modelos_area/<área>/tabelas/` | `capacidade.py`, `modelos_area.py` | `comparacao.py` |
 
 ### `main.py`
 
@@ -87,9 +106,9 @@ Os sete scripts de `curvas.py` a `carga.py` vieram de uma revisão com um
 profissional de baterias. Seis deles formam um encadeamento: `curvas.py` lê as
 descargas brutas uma vez e os outros trabalham sobre o cache que ele deixa.
 `carga.py` é independente — tem cache próprio e lê os ensaios de carga, que
-nenhum outro script toca. `classificacao.py` fecha a cadeia: lê só a saída de
-`normalizar.py`, mas fica por último para que nada que rode depois dela precise
-ser refeito.
+nenhum outro script toca. `classificacao.py` e `regressao.py` fecham a cadeia:
+leem só a saída de `normalizar.py`, mas ficam por último para que nada que rode
+depois delas precise ser refeito.
 
 ## `preparar_dados.py`
 
@@ -120,14 +139,15 @@ listagem de diretório de quem fez a limpeza original. Está registrada em
 
 ## `graficos_nasa.py`
 
-Gera `saida_nasa/` com três tabelas de métricas e sete gráficos:
+Gera `saida_nasa/geral/` com três tabelas de métricas, em `tabelas/`, e sete
+gráficos, em `figuras/`:
 
 | | |
 |---|---|
 | `metricas_descargas.csv` | uma linha por descarga: condição, capacidade, SoH, duração, tensão final, temperatura máxima |
 | `metricas_impedancia.csv` | uma linha por ensaio de impedância: Re, Rct, SoH da descarga mais próxima |
 | `resumo_baterias.csv` | uma linha por bateria, incluindo a correlação entre resistência e SoH |
-| `graficos/01…07` | capacidade por condição, SoH, efeito da condição, resistência, predição de SoH, curvas de descarga, espectro |
+| `figuras/01…07` | capacidade por condição, SoH, efeito da condição, resistência, predição de SoH, curvas de descarga, espectro |
 
 ## `correlacao_soh.py`
 
@@ -137,7 +157,7 @@ python src/correlacao_soh.py --sem-graficos  # so as tabelas
 python src/correlacao_soh.py --remontar      # ignora o cache e rele as 2.794 curvas
 ```
 
-Monta `saida_nasa/correlacao/tabela_modelagem.csv` **no esquema da Tabela 2 do
+Monta `saida_nasa/correlacao/tabelas/tabela_modelagem.csv` **no esquema da Tabela 2 do
 artigo** — uma coluna por variavel do dicionario de dados, sem acrescimo — e
 correlaciona tudo contra `SOH`.
 
@@ -196,7 +216,7 @@ python src/limpeza.py --grupo-minimo 5  # aceita grupos mais curtos
 python src/limpeza.py --podar           # remove tambem os pares redundantes
 ```
 
-Transforma a tabela da Tabela 2 em `saida_nasa/preprocessado/dados_modelagem.csv`
+Transforma a tabela da Tabela 2 em `saida_nasa/preprocessado/tabelas/dados_modelagem.csv`
 — 2.719 linhas, 11 atributos, 33 baterias — com o relatorio de cada decisao.
 
 **Nao normaliza e nao imputa**, de proposito: escalonamento e imputacao ajustados
@@ -274,7 +294,7 @@ python src/normalizar.py --fracao-teste 0.3
 python src/normalizar.py --so-relativas      # descarta as colunas brutas
 ```
 
-Escreve `saida_nasa/normalizado/dados_normalizados.csv` — 2.719 x 27, com as
+Escreve `saida_nasa/normalizado/tabelas/dados_normalizados.csv` — 2.719 x 27, com as
 colunas `split` e `fold`. Sao tres coisas que costumam receber o mesmo nome:
 
 **1. Divisao por bateria.** Dividir por descarga poria a mesma celula nos dois
@@ -325,7 +345,7 @@ python src/curvas.py --amostra 50 # teste rápido
 ```
 
 Lê as curvas de descarga **uma única vez** e escreve
-`saida_nasa/curvas/features_curvas.csv` — 2.794 × 87. Daqui saem as três áreas,
+`saida_nasa/curvas/tabelas/features_curvas.csv` — 2.794 × 87. Daqui saem as três áreas,
 a carga integrada e os descritores de forma que os scripts seguintes consomem.
 
 **Três áreas, porque a curva de descarga admite três integrais:** `carga_Ah`
@@ -432,6 +452,9 @@ saida_nasa/cluster/grupo_corrente_temperatura/
 saida_nasa/cluster/grupo_corrente_temperatura_corte/
     capacidade/  modelos_area/{carga,tensao,energia}/
 ```
+
+Cada uma dessas pastas tem as suas `tabelas/` e `figuras/`; a correlação das
+áreas com o SOH fica em `modelos_area/tabelas/`.
 
 `capacidade.py` dá a taxa de fade em Ah/ciclo, os ciclos até 80% e o joelho de
 cada célula. `modelos_area.py` ajusta quatro famílias à série área × ciclo de
@@ -611,7 +634,7 @@ python src/classificacao.py --sem-referencias  # só o kNN, sem as famílias da 
 python src/classificacao.py --sem-graficos     # só as tabelas
 ```
 
-Escreve `saida_nasa/classificacao/`, em 1 a 2 min (quase tudo Random Forest e
+Escreve `saida_nasa/classificacao/`, em 2 a 3 min (quase tudo Random Forest e
 Gradient Boosting; com `--sem-referencias` são poucos segundos). Cada descarga
 vira **fim de vida** (SOH < 80%, o limiar do artigo) ou **saudável**, e quem
 decide é o **kNN**: as k descargas de treino mais próximas no espaço padronizado
@@ -653,7 +676,7 @@ de k ≈ 100 (73% em k = 201), quando a vizinhança vira média regional. O máx
 1. **Protocolo.** A partição aleatória por descarga, que põe a mesma célula dos
    dois lados, soma de 13 a 22 p.p. e leva todos para 86% a 97%. No kNN
    o mecanismo fica à vista: com ela, o vizinho mais próximo de uma descarga é
-   da mesma célula em 90% dos casos (`vazamento.csv`). O modelo reconhece a
+   da mesma célula em 90% dos casos. O modelo reconhece a
    célula em vez de medir a degradação — é o vazamento que o artigo aponta em
    [13].
 2. **Atributos.** Trocar brutos por relativos soma de 5 a 14 p.p. aos modelos
@@ -759,6 +782,63 @@ intervalo por células e a mesma comparação em pares da acurácia balanceada.
   também muda com a proporção de fim de vida, que difere entre treino (44%) e
   teste (47%).
 
+### Os cinco algoritmos lado a lado: matriz de confusão e métricas
+
+As quatro referências saem com o mesmo detalhe do kNN: a matriz de confusão na
+validação e no teste (`03_matrizes_de_confusao.png`), todas as métricas com o
+intervalo por células (`04_metricas_por_algoritmo.png`) e o erro de cada
+algoritmo em cada célula de teste (`06_erro_por_celula.png`). Os intervalos de
+acurácia, sensibilidade, especificidade e precisão saem das mesmas
+reamostragens de células das outras métricas. Nada disso escolhe nada.
+
+| teste: 718 descargas, 340 em fim de vida | detectado (VP) | não detectado (FN) | alarme falso (FP) | saudável reconhecida (VN) | sensibilidade (IC 95%) | especificidade (IC 95%) | precisão (IC 95%) |
+|---|---|---|---|---|---|---|---|
+| **kNN (k = 25)** | 174 | 166 | 15 | 363 | 51,2% (5–79) | 96,0% (90–99) | 92,1% (68–97) |
+| SVM (RBF) | 218 | 122 | 13 | 365 | 64,1% (37–81) | 96,6% (93–99) | 94,4% (83–98) |
+| Gradient Boosting | 262 | 78 | 40 | 338 | 77,1% (56–90) | 89,4% (81–98) | 86,8% (62–97) |
+| Random Forest | 220 | 120 | 42 | 336 | 64,7% (53–79) | 88,9% (81–96) | 84,0% (65–95) |
+| Regressão logística | 308 | 32 | 85 | 293 | 90,6% (84–96) | 77,5% (61–95) | 78,4% (52–95) |
+
+| validação: 2.001 descargas, 874 em fim de vida | VP | FN | FP | VN | sensibilidade | especificidade | precisão |
+|---|---|---|---|---|---|---|---|
+| **kNN (k = 25)** | 626 | 248 | 144 | 983 | 71,6% | 87,2% | 81,3% |
+| SVM (RBF) | 615 | 259 | 140 | 987 | 70,4% | 87,6% | 81,5% |
+| Gradient Boosting | 583 | 291 | 160 | 967 | 66,7% | 85,8% | 78,5% |
+| Random Forest | 525 | 349 | 144 | 983 | 60,1% | 87,2% | 78,5% |
+| Regressão logística | 449 | 425 | 176 | 951 | 51,4% | 84,4% | 71,8% |
+
+- **Na validação os cinco erram do mesmo jeito; no teste, cada um troca um
+  erro pelo outro.** Nas 25 células de treino a especificidade fica entre 84% e
+  88% em todos, e o que os separa é quanto fim de vida cada um detecta (de 51%
+  a 72%). No teste, kNN e SVM quase não dão alarme falso (15 e 13) e deixam
+  passar 166 e 122 descargas em fim de vida; a regressão logística faz o
+  contrário, com 32 não detectadas e 85 alarmes falsos; o Gradient Boosting
+  fica no meio (78 e 40).
+- **Nenhum algoritmo lidera todas as métricas** (`04_metricas_por_algoritmo.png`).
+  No teste, a logística tem a maior acurácia balanceada, sensibilidade e F1; o
+  SVM, a maior especificidade, precisão e AUC. Os intervalos se sobrepõem, menos
+  na sensibilidade: o da logística (84–96%) fica todo acima dos de kNN, SVM e
+  Random Forest.
+- **O intervalo da sensibilidade do kNN vai de 5% a 79%.** Quem decide é quais
+  células com fim de vida caem na reamostragem: B0018 e B0054 têm juntas 108
+  das 340 descargas em fim de vida do teste, e o kNN deixa passar 103 delas.
+- **Os erros se concentram nas mesmas células** (`06_erro_por_celula.png`).
+  B0042 a 4 A / 4 °C é a pior na média dos cinco (50% de erro, de 39% a 61%), e
+  B0054 a 2 A / 4 °C vem em seguida (de 19% a 46%). Em B0039 a 4 A / 24 °C os
+  cinco erram as mesmas duas descargas: as leituras isoladas de 25% e 34% de
+  SOH.
+- **E cada algoritmo tem a sua célula difícil.** O kNN deixa passar as 58
+  descargas em fim de vida de B0018, em que a logística erra 2. A logística dá
+  20 alarmes falsos nas 25 descargas de B0042 a 1 A / 4 °C, um par sem nenhum
+  fim de vida em que kNN e SVM não erram nada. É o par renormalizado no ciclo
+  87: na regressão, os cinco algoritmos estimam o SOH dele de 8 a 11 p.p.
+  abaixo do medido.
+- **O acerto por célula de treino varia em todos, não só no kNN**
+  (`validacao_por_celula.csv`): de 2% a 100% na logística, de 39% a 100% no
+  Gradient Boosting e de 43% a 100% no SVM e no Random Forest, contra 33% a
+  100% no kNN. É essa variação entre células que impede 8 células de teste de
+  ordenar os algoritmos.
+
 ### Variante pós-hoc: vizinhos só do mesmo grupo de comportamento
 
 Na análise dos erros do teste, mais da metade dos vizinhos que enganaram B0018
@@ -799,23 +879,321 @@ A variante não entra no modelo e não foi avaliada no teste.
   e as referências usam o padrão. No teste isso não favorece ninguém: o k saiu
   só do treino.
 
+Em `saida_nasa/classificacao/tabelas/`:
+
 | | |
 |---|---|
 | `escolha_de_k.csv` | acurácia balanceada por k, nos três conjuntos de atributos |
-| `comparacao.csv` | modelo × atributos × validação (por célula e aleatória): acurácia balanceada, sensibilidade, especificidade, F1, AUC e o k do kNN |
-| `vazamento.csv` | de onde vêm os vizinhos na partição aleatória |
-| `validacao_por_celula.csv` | o acerto do kNN em cada célula de treino, quando ela é a deixada de fora, com e sem a restrição ao grupo |
+| `comparacao.csv` | modelo × atributos × validação (por célula e aleatória): acurácia balanceada, sensibilidade, especificidade, F1, AUC, precisão, acurácia, a matriz de confusão (VP, FN, FP, VN) e o k do kNN |
+| `validacao_por_celula.csv` | o acerto de cada algoritmo em cada célula de treino, quando ela é a deixada de fora, e o do kNN com a restrição ao grupo |
 | `variante_mesmo_grupo.csv` | acurácia balanceada por k, com e sem a restrição ao grupo de comportamento |
-| `teste.csv` | métricas no teste, IC por reamostragem de células e diferença pareada para o kNN em acurácia balanceada, AUC e F1, com e sem Bonferroni |
-| `teste_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula |
-| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram |
+| `teste.csv` | métricas no teste, com a matriz de confusão, IC por reamostragem de células de todas elas e diferença pareada para o kNN em acurácia balanceada, AUC e F1, com e sem Bonferroni |
+| `teste_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula, de cada algoritmo |
+| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram, e a classe e o escore de cada referência |
+
+Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
+
+| | |
+|---|---|
 | `01_escolha_de_k.png` | a curva de k nos três conjuntos, com a faixa de equivalência |
 | `02_protocolo_atributos_algoritmo.png` | o efeito do protocolo, dos atributos e do algoritmo na validação |
-| `03_teste_comparacao.png` | o teste com IC ao lado da validação, por algoritmo |
-| `04_matriz_confusao.png` | a matriz de confusão do kNN no teste |
-| `05_teste_por_celula.png` | SOH contra ciclo em cada célula de teste, com os erros marcados |
-| `06_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
-| `07_curvas_roc.png` | as curvas ROC dos cinco modelos no teste, com a AUC e o ponto de operação do kNN |
+| `03_matrizes_de_confusao.png` | a matriz de confusão de cada algoritmo, na validação e no teste |
+| `04_metricas_por_algoritmo.png` | acurácia balanceada, sensibilidade, especificidade, precisão, F1 e AUC de cada algoritmo, no teste com IC e na validação |
+| `05_curvas_roc.png` | as curvas ROC dos cinco modelos no teste, com a AUC e o ponto de operação do kNN |
+| `06_erro_por_celula.png` | a fração de erro de cada algoritmo em cada célula de teste, com os alarmes falsos e os fins de vida não detectados |
+| `07_teste_por_celula.png` | SOH contra ciclo em cada célula de teste, com os erros do kNN marcados |
+| `08_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
+
+## `regressao.py`
+
+```bash
+python src/regressao.py                    # λ na validação, avaliação no teste
+python src/regressao.py --lam 10000        # força λ
+python src/regressao.py --sem-referencias  # só o GAM, sem as famílias da literatura
+python src/regressao.py --sem-graficos     # só as tabelas
+```
+
+Escreve `saida_nasa/regressao/`, em cerca de 2,5 min (quase tudo Random Forest e
+Gradient Boosting). Estima o **SOH de cada descarga** a partir do que se mede
+nela — tensão, corrente, temperatura, impedância —, sem a capacidade, que é o
+próprio SOH, e converte a estimativa em **vida útil remanescente (RUL)**, em
+ciclos:
+
+    RUL = (SOH estimado − 80) / perda de SOH por ciclo da condição
+
+**Por que um GAM.** A regra é a da classificação: um algoritmo fora das famílias
+dos trabalhos relacionados. O modelo aditivo generalizado escreve o SOH como uma
+soma de funções suaves, uma por atributo, e cada uma é uma P-spline: base
+B-spline cúbica com 20 nós e penalidade nas segundas diferenças dos coeficientes
+(Eilers e Marx, 1996). Um parâmetro só, λ, vai de curvas que seguem o ruído
+(λ → 0) a retas (λ → ∞), quando o GAM vira regressão linear. A forma de cada
+função sai dos dados e pode ser desenhada na unidade física do atributo
+(`07_efeitos_gam.png`). **Fora da faixa de 1% a 99% do treino, cada função fica
+constante**: prolongar a curva, como faz a regressão linear, explode numa
+condição que o treino nunca viu.
+
+**Quais pares entram.** Em 8 dos 43 pares célula × condição a referência do SOH
+é uma leitura isolada, e o SOH já começa abaixo de 80%: B0036 marca 99% das
+descargas em fim de vida, B0049 a B0051 começam entre 30% e 60%. Na
+classificação isso troca alguns rótulos; na regressão o erro é quadrático, e um
+par desses pesa no RMSE mais que células inteiras. Entram só os pares cujo SOH
+**começa saudável** — mediana das 5 primeiras descargas, a janela da referência
+de `normalizar.py`, acima de 80%. Saem 7 pares do treino (5 células inteiras:
+B0033, B0036, B0049, B0050 e B0051) e 1 do teste (B0042 a 4 A / 4 °C). Ficam
+1.447 descargas de 20 células no treino e 672 de 8 no teste. A regra vale igual
+dos dois lados e foi fixada antes de qualquer previsão.
+
+**Atributos.** Os relativos ao início de vida, a temperatura ambiente, a
+corrente e os **ciclos desde o início do par**, no lugar do ciclo da célula que
+a classificação usa: o SOH é relativo à referência do par, e nas células que
+mudam de condição (B0041 a B0044) o ciclo da célula segue contando enquanto o
+SOH recomeça em 100%. Na validação, a troca baixa o RMSE do GAM de 7,09 para
+6,49 p.p. Temperatura e corrente são o protocolo, com poucos valores distintos,
+e entram como reta.
+
+**λ = 3×10⁴: o mais suave equivalente ao melhor.** Validação deixando uma
+célula de fora nas 20 de treino, com imputação e escala refeitas a cada rodada.
+O RMSE contra λ forma um platô de 3×10³ a 3×10⁴, e vence o maior λ a até 2% do
+menor RMSE (6,37 em λ = 10⁴) — a lógica do k do kNN e do agrupamento. O GAM
+final usa **13,9 graus de liberdade efetivos**, contra 12 da regressão linear:
+as funções saem quase retas, e o que mais o separa da regressão linear é a borda
+constante.
+
+### Validação: protocolo, rótulos, atributos e algoritmo
+
+| RMSE (p.p.) | relativos | brutos | todos | relativos, partição aleatória | relativos, com os pares artificiais no treino |
+|---|---|---|---|---|---|
+| **GAM (λ = 3×10⁴)** | **6,49** | 6,88 | 6,61 | 4,98 | 7,39 |
+| Regressão linear | 11,67 | 7,03 | 8,83 | 5,18 | 8,92 |
+| SVR (RBF) | 6,29 | 5,82 | 5,78 | 4,23 | 5,93 |
+| Random Forest | 4,99 | 5,78 | 5,95 | 1,83 | 7,99 |
+| Gradient Boosting | 5,01 | 5,88 | 6,01 | 1,80 | 8,50 |
+
+Prever a média do SOH do treino dá 11,48.
+
+1. **Protocolo.** A partição aleatória por descarga baixa o RMSE de 1,5 a
+   6,5 p.p. Nas árvores ele cai de 5,0 para 1,8: é o modelo reconhecendo a
+   célula, o mesmo vazamento que a classificação mediu.
+2. **Rótulos.** Os 7 pares de SOH artificial de volta ao treino pioram o
+   Random Forest em 3,0 p.p., o Gradient Boosting em 3,5 e o GAM em 0,9. A
+   regressão linear melhora 2,8, e não pelo rótulo: eles devolvem ao treino a
+   condição 4 A / 4 °C (B0043 e B0044). Sem ela, quando B0041 — a única célula
+   avaliável nessa condição — fica de fora, a regressão linear prolonga a reta
+   até um RMSE de 59,7 p.p. nela.
+3. **Atributos.** Sem padrão único: os relativos ajudam o GAM (0,4 p.p.) e as
+   árvores (0,8 e 0,9) e atrapalham o SVR (0,5) e a regressão linear (4,6, pela
+   explosão em B0041).
+4. **Algoritmo.** Random Forest e Gradient Boosting ficam à frente, com 5,0; o
+   GAM é o 4º de 5.
+
+### Teste: as 8 células, avaliadas uma vez
+
+| teste | RMSE (p.p.) | IC 95% | MAE | R² | viés | diferença de RMSE para o GAM (IC 95% pareado) |
+|---|---|---|---|---|---|---|
+| **GAM (λ = 3×10⁴)** | **6,88** | 4,82–9,04 | 5,08 | 0,57 | −2,2 | — |
+| Regressão linear | 7,29 | 5,03–9,67 | 5,47 | 0,52 | −2,4 | +0,41 (+0,02 a +0,80) |
+| SVR (RBF) | 6,28 | 3,26–8,50 | 4,30 | 0,64 | +2,5 | −0,60 (−3,44 a +1,33) |
+| Random Forest | 8,45 | 4,34–11,11 | 6,14 | 0,35 | +4,0 | +1,57 (−2,64 a +4,60) |
+| Gradient Boosting | 7,72 | 4,12–10,03 | 5,52 | 0,46 | +3,4 | +0,83 (−2,91 a +3,46) |
+
+Prever a média do treino dá 10,69. Diferença positiva: a referência erra mais
+que o GAM. Os intervalos vêm de reamostrar células inteiras, como na
+classificação.
+
+**A ordem dos algoritmos se inverte de novo.** Random Forest e Gradient
+Boosting, os melhores na validação, são os piores no teste; o GAM sobe de 4º
+para 2º, atrás do SVR. Só a diferença para a regressão linear exclui o zero, e
+não resiste à correção de Bonferroni. Com 8 células o teste não separa os
+modelos — o mesmo que a classificação encontrou.
+
+**Onde o GAM erra** (`06_teste_por_celula.png`):
+
+- **B0042 a 1 A / 4 °C**, viés de −10,3 p.p.: renormalizada no ciclo 87, como
+  B0043 e B0044 na validação. A célula chega à condição já usada, e o SOH
+  recomeça em 100%.
+- **B0039 a 4 A / 24 °C**, RMSE de 24,4 p.p. em 12 descargas: duas delas são
+  leituras isoladas de 25% e 34% numa célula que entrega de 86% a 100%.
+- **B0054 a 2 A / 4 °C**, viés de −7,6 p.p. e estimativa serrilhada: tensão e
+  temperatura alternam de uma descarga para a seguinte (3,01 V e 14,5 °C contra
+  3,23 V e 12,0 °C) enquanto a capacidade quase não se mexe. Todos os modelos
+  herdam a alternância.
+
+**O que o GAM aprendeu** (`07_efeitos_gam.png`), em efeito típico (distância
+entre os quantis de 5% e 95% de cada função nas descargas de treino): a tensão
+medida na bateria, relativa ao início, move o SOH em 22,5 p.p.; a idade no par,
+em 18,0; a temperatura ambiente, em 12,1 (+0,31 p.p. por °C). Re e Rct derrubam
+o SOH quando sobem, como a física pede; a impedância retificada sai com o sinal
+trocado, porque divide a informação com Re. A tensão na carga quase não pesa
+(1,0 p.p.): o que ela diz já está na tensão medida.
+
+### RUL: a conversão
+
+A **perda de SOH por ciclo** de cada condição é a mediana, entre os pares de
+treino dela, da inclinação de Theil–Sen do SOH medido contra o ciclo — robusta
+aos saltos de regeneração que as células da NASA têm depois das pausas. Entram
+todos os pares da condição, cheguem ou não a 80%: tirar a taxa só dos que
+chegaram escolheria as células pelo desfecho.
+
+| condição | 1 A / 4 °C | 2 A / 22 °C | 4 A / 43 °C | 2 A / 24 °C | 4 A / 24 °C | 2 A / 4 °C | 1 A / 44 °C |
+|---|---|---|---|---|---|---|---|
+| p.p. de SOH por ciclo | −0,52 | −0,35 | −0,30 | −0,21 | −0,14 | −0,12 | −0,02 |
+
+O **fim de vida real** é a primeira de 3 descargas seguidas abaixo de 80%. As
+previsões começam na 5ª descarga do par, quando a referência de início de vida
+dos atributos já está fechada. Chegam a 80% 9 dos 25 pares de treino e 4 dos 10
+de teste (B0018 no ciclo 74, B0034 no 9, B0046 no 21, B0054 no 56). Os demais
+são censurados: deles só se pode cobrar que a previsão não anuncie o fim de vida
+antes do fim da observação (alarme antecipado).
+
+**A conversão foi escolhida na validação**, contra a tendência da própria
+célula — uma reta nas últimas W estimativas, prolongada até 80% —, nos mesmos
+358 instantes de 7 pares de treino:
+
+| erro absoluto médio do RUL (ciclos) | SOH medido (oráculo) | SOH do GAM |
+|---|---|---|
+| **taxa da condição** | **13,3** | **28,3** |
+| tendência da célula, W = 10 | 51,8 | 54,3 |
+| tendência da célula, W = 20 | 34,7 | 47,2 |
+| tendência da célula, W = 30 | 32,1 | 46,2 |
+| tendência da célula, W = 50 | 38,5 | 50,3 |
+| tendência da célula, todas as estimativas | 39,4 | 51,9 |
+
+A taxa da condição vence com todos os modelos. A tendência erra mais no começo
+da vida, quando a célula quase não perdeu capacidade e a reta prolongada passa
+longe dos 80% (`08_rul_conversoes.png`).
+
+**O oráculo** é a mesma conversão aplicada ao SOH medido: separa o erro da
+conversão do erro da estimativa. Pela taxa da condição os dois se somam,
+enquanto a previsão não é cortada em zero: o erro do RUL é o do oráculo mais o
+erro do SOH dividido pela perda por ciclo. Numa condição que perde 0,12 p.p. por
+ciclo, 5 p.p. de SOH são 40 ciclos.
+
+### RUL no teste
+
+| teste: 143 instantes de 4 pares | MAE (ciclos) | mediana do erro absoluto | viés | dentro de ±20% | alarme antecipado (148 instantes censurados) |
+|---|---|---|---|---|---|
+| oráculo (SOH medido) | 14,6 | 11,8 | +12,2 | 17% | 0% |
+| **GAM** | **17,1** | **7,6** | +1,5 | 31% | 14% |
+| Regressão linear | 18,4 | 7,1 | +2,6 | 36% | 14% |
+| SVR (RBF) | 16,6 | 15,0 | +14,5 | 21% | 8% |
+| Random Forest | 23,7 | 21,0 | +14,9 | 9% | 13% |
+| Gradient Boosting | 21,8 | 20,2 | +12,3 | 13% | 11% |
+
+| par de teste | fim de vida | MAE do GAM | MAE do oráculo | viés do SOH do GAM | o mesmo, em ciclos |
+|---|---|---|---|---|---|
+| B0018 · 2 A / 24 °C | ciclo 74 | 5,5 | 12,1 | −3,5 p.p. | −16,9 |
+| B0046 · 1 A / 4 °C | ciclo 21 | 3,3 | 5,1 | +2,0 p.p. | +3,8 |
+| B0054 · 2 A / 4 °C | ciclo 56 | 32,4 | 21,0 | −5,4 p.p. | −44,2 |
+| B0034 · 4 A / 24 °C | ciclo 9 | 64,6 | 14,5 | +6,9 p.p. | +50,4 |
+
+- **Onde a célula se degrada como as de treino, a conversão funciona.** Em
+  B0018, 60% das previsões do GAM caem no cone de ±20% (`09_rul_teste_por_algoritmo.png`); em
+  B0046 o erro médio é de 3,3 ciclos, num cone que ali é estreito (a vida toda
+  tem 21 ciclos). Em B0018 o GAM chega a errar menos que o oráculo, mas por
+  compensação: o viés do SOH (−16,9 ciclos) cancela o da taxa da condição
+  (+11,8).
+- **Onde a condição perde SOH devagar, o erro do SOH se multiplica.** Em
+  2 A / 4 °C cada p.p. de SOH vale 8 ciclos, e a alternância de B0054 vira
+  previsões que pulam entre 0 e mais de 80 ciclos.
+- **B0034 tem fim de vida artificial.** A referência do SOH é uma leitura de
+  100% no ciclo 45, entre vizinhas de 83% a 88%, e o par cruza 80% no ciclo 9.
+  O critério de entrada só pega a leitura isolada quando o SOH já começa abaixo
+  de 80%; aqui ele começa em 89%.
+- **A mediana conta outra história que a média.** O GAM e a regressão linear
+  têm as menores medianas do erro absoluto (7,6 e 7,1 ciclos, contra 11,8 do
+  oráculo). O MAE do GAM é puxado por B0034 e B0054.
+- **O alarme antecipado é o ponto fraco.** Nos pares censurados o GAM anuncia o
+  fim de vida antes da hora em 14% dos instantes do teste e 34% da validação,
+  contra 0% e 8% do oráculo.
+
+**Cuidados:**
+
+- **Ajustar agora contaminaria o teste.** A ideia natural para B0054 é converter
+  a média das últimas estimativas, e não a última. Como surgiu de olhar o teste,
+  ela roda como variante pós-hoc, só na validação, e lá quase não muda nada: o
+  erro do GAM vai de 28,3 para 27,7 ciclos com a média de 10, e o alarme
+  antecipado de 34% para 33%. Não entra no modelo e não foi avaliada no teste.
+- **O RUL do teste se apoia em 4 pares.** Não há intervalo de confiança que
+  valha com isso; os resultados por par dizem mais que a média.
+- **Vale para células com histórico de início de vida**, como os atributos
+  relativos de `normalizar.py`, e para condições que o treino conhece: a taxa de
+  perda vem das células de treino na mesma condição.
+
+### Os cinco algoritmos lado a lado
+
+As quatro referências saem com o mesmo detalhe do GAM: todas as métricas com o
+intervalo por células (`03_metricas_por_algoritmo.png`), o SOH estimado contra o
+medido (`04_previsto_vs_real_por_algoritmo.png`), o erro em cada par de teste
+(`05_erro_por_par.png`) e o RUL nos pares que chegam a 80%
+(`09_rul_teste_por_algoritmo.png`). Cortado em 80%, o SOH estimado vira uma
+classificação de fim de vida, com a mesma matriz de confusão da classificação:
+
+| teste: 672 descargas, 317 em fim de vida | detectado | não percebido | alarme falso | saudável reconhecida | viés do SOH (IC 95%) |
+|---|---|---|---|---|---|
+| **GAM (λ = 3×10⁴)** | 278 | 39 | 45 | 310 | −2,2 p.p. (−5,1 a +0,4) |
+| Random Forest | 112 | 205 | 28 | 327 | +4,0 (−1,2 a +8,4) |
+| Gradient Boosting | 128 | 189 | 34 | 321 | +3,4 (−1,2 a +7,3) |
+| SVR (RBF) | 177 | 140 | 3 | 352 | +2,5 (−0,6 a +4,9) |
+| Regressão linear | 277 | 40 | 48 | 307 | −2,4 (−5,4 a +0,4) |
+
+- **Menor RMSE não quer dizer melhor alarme.** O SVR tem o menor RMSE (6,28
+  p.p.) e não percebe 140 das 317 descargas em fim de vida (44%); Random Forest
+  e Gradient Boosting não percebem 65% e 60%. Os três veem, em média, as células
+  mais saudáveis do que estão (+2,5 a +4,0 p.p.). GAM e regressão linear erram
+  para o outro lado (−2,2 e −2,4 p.p.): deixam passar 12% e 13% do fim de vida,
+  ao custo de 45 e 48 alarmes falsos. Com 8 células nenhum desses vieses é
+  firme — todos os intervalos incluem o zero —, então a diferença nos fins de
+  vida não percebidos é destas células de teste, não uma regra dos algoritmos.
+- **Os pares difíceis são os mesmos para os cinco** (`05_erro_por_par.png`). Em
+  B0039 a 4 A / 24 °C o RMSE fica entre 24 e 26 p.p. em todos, pelas duas
+  leituras isoladas de 25% e 34%; em B0042 a 1 A / 4 °C, o par renormalizado,
+  todos estimam o SOH de 8 a 11 p.p. abaixo do medido. Em 7 dos 10 pares os
+  cinco erram para o mesmo lado: o lado do erro depende mais do par que do
+  algoritmo.
+- **Onde eles se separam.** A alternância de tensão e temperatura de B0054 pesa
+  muito mais no GAM e na regressão linear (RMSE de 10,0 e 11,2 p.p.) que no SVR
+  e nas árvores (de 4,4 a 5,2). Em B0034 é o contrário: Random Forest e
+  Gradient Boosting superestimam o SOH em 12,0 e 10,5 p.p. (RMSE de 12,5 e
+  10,9), e o GAM erra 5,8, com viés de +0,4.
+- **No RUL, SVR e GAM ficam próximos na média, por caminhos opostos**
+  (`09_rul_teste_por_algoritmo.png`). Nos 4 pares, o SVR erra 16,6 ciclos e o
+  GAM 17,1, mas o GAM acerta B0018 (5,5 ciclos, contra 18,2 do SVR) e erra
+  B0054 (32,4 contra 12,6); a regressão linear se parece com o GAM nos dois.
+  Random Forest e Gradient Boosting erram 21,3 e 20,0 ciclos em B0018, onde o
+  viés positivo do SOH vira vida remanescente longa demais. Em B0034, de fim de
+  vida artificial, todos erram de 56 a 100 ciclos.
+
+Em `saida_nasa/regressao/tabelas/`:
+
+| | |
+|---|---|
+| `escolha_de_lambda.csv` | RMSE por λ nos três conjuntos de atributos e com o ciclo da célula no lugar da idade no par |
+| `comparacao.csv` | modelo × atributos × validação × rótulos no treino: RMSE, MAE, viés e R² |
+| `validacao_por_par.csv` | erro de cada modelo em cada par de treino, quando a célula dele é a deixada de fora |
+| `teste.csv` | métricas no teste, IC por reamostragem de células (o do viés também), as quatro casas do limiar de 80% e diferença pareada para o GAM, com e sem Bonferroni |
+| `teste_por_par.csv` | RMSE e viés de cada modelo em cada par de teste, inclusive o que fica fora das métricas |
+| `predicoes_teste.csv` | cada descarga de teste com o SOH medido, as estimativas dos cinco modelos, o RUL real e o RUL de cada modelo e do oráculo |
+| `efeitos_gam.csv`, `efeitos_resumo.csv` | as funções do GAM final na unidade física, e o efeito típico de cada uma |
+| `taxas_por_condicao.csv` | a inclinação de Theil–Sen de cada par de treino e a taxa da condição |
+| `fins_de_vida.csv` | o ciclo do fim de vida de cada par avaliável, ou censurado |
+| `rul_conversoes_validacao.csv` | as conversões comparadas na validação, por fonte do SOH e por fração da vida |
+| `rul_variante_media_movel.csv` | a variante pós-hoc, média das últimas M estimativas antes de converter, só na validação |
+| `rul_resumo.csv` | o erro do RUL por fonte, na validação e no teste |
+| `rul_teste_por_par.csv` | o erro do RUL por par e algoritmo no teste, com o viés do SOH convertido em ciclos |
+
+Em `saida_nasa/regressao/figuras/`, na ordem do artigo:
+
+| | |
+|---|---|
+| `01_escolha_de_lambda.png` | o RMSE contra λ, com a faixa de equivalência |
+| `02_protocolo_rotulos_atributos_algoritmo.png` | o efeito do protocolo, dos rótulos, dos atributos e do algoritmo na validação |
+| `03_metricas_por_algoritmo.png` | RMSE, MAE, R² e viés de cada algoritmo, no teste com IC e na validação |
+| `04_previsto_vs_real_por_algoritmo.png` | SOH estimado contra medido de cada algoritmo, com as casas do limiar de 80% |
+| `05_erro_por_par.png` | o RMSE e o viés de cada algoritmo em cada par de teste |
+| `06_teste_por_celula.png` | o SOH medido e o estimado pelo GAM em cada par de teste |
+| `07_efeitos_gam.png` | o que move o SOH segundo o GAM, atributo por atributo |
+| `08_rul_conversoes.png` | taxa da condição contra tendência da célula, por fração da vida |
+| `09_rul_teste_por_algoritmo.png` | o RUL de cada algoritmo nos pares de teste que chegam a 80%, com o oráculo |
 
 
 ## O que os dados exigem cuidado

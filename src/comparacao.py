@@ -6,8 +6,9 @@ Confronto entre os dois esquemas de grupo: com e sem a tensao de corte.
     python comparacao.py
     python comparacao.py --sem-graficos
 
-Le as duas arvores de esquema sob saida_nasa/cluster/ e escreve
-saida_nasa/cluster/comparacao/. Roda depois de capacidade.py e modelos_area.py.
+Le as tabelas das duas arvores de esquema sob saida_nasa/cluster/ e escreve
+saida_nasa/cluster/comparacao/: as tabelas em tabelas/, o grafico em figuras/.
+Roda depois de capacidade.py e modelos_area.py.
 
 A pergunta e uma so: acrescentar a tensao de corte ao `test_condition` melhora
 ou piora os grupos? Quatro medidas respondem, e nenhuma delas e opiniao.
@@ -39,6 +40,7 @@ from pathlib import Path
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
 SAIDA = RAIZ / "saida_nasa" / "cluster" / "comparacao"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 ESQUEMAS = ["grupo_corrente_temperatura", "grupo_corrente_temperatura_corte"]
 AREA_PADRAO = "energia"
 
@@ -65,9 +67,9 @@ def checar():
         p("ERRO: faltam dependencias: " + ", ".join(faltando))
         sys.exit(1)
     for e in ESQUEMAS:
-        if not (RAIZ / "saida_nasa" / "cluster" / e / "capacidade" /
+        if not (RAIZ / "saida_nasa" / "cluster" / e / "capacidade" / "tabelas" /
                 "resumo_por_grupo.csv").exists():
-            p(f"ERRO: falta saida_nasa/cluster/{e}/capacidade/.")
+            p(f"ERRO: falta saida_nasa/cluster/{e}/capacidade/tabelas/.")
             p("    Rode antes: python capacidade.py && python modelos_area.py")
             sys.exit(1)
     return mods
@@ -76,9 +78,9 @@ def checar():
 def ler(mods, esquema, area):
     pd = mods["pandas"]
     base = RAIZ / "saida_nasa" / "cluster" / esquema
-    cap = pd.read_csv(base / "capacidade" / "resumo_por_grupo.csv")
-    fade = pd.read_csv(base / "capacidade" / "fade_por_celula.csv")
-    m = base / "modelos_area" / area
+    cap = pd.read_csv(base / "capacidade" / "tabelas" / "resumo_por_grupo.csv")
+    fade = pd.read_csv(base / "capacidade" / "tabelas" / "fade_por_celula.csv")
+    m = base / "modelos_area" / area / "tabelas"
     aj = pd.read_csv(m / "ajustes.csv") if (m / "ajustes.csv").exists() else None
     venc = pd.read_csv(m / "vencedores.csv") if (m / "vencedores.csv").exists() else None
     return cap, fade, aj, venc
@@ -327,7 +329,8 @@ def desenhar(mods, plt, tab, pc):
                   "A esquerda o custo da fragmentacao, a direita o beneficio pareado "
                   "condicao a condicao. Dividir por corte so vale se o ganho de "
                   "coerencia superar a perda de celulas por grupo.")
-    fig.savefig(SAIDA / "01_qual_agrupamento_ganha.png", bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / "01_qual_agrupamento_ganha.png", bbox_inches="tight")
     plt.close(fig)
     p(f"  01_qual_agrupamento_ganha.png")
 
@@ -340,7 +343,7 @@ def main():
 
     mods = checar()
     pd = mods["pandas"]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
 
     p("Nominal contra protocolo completo")
     p("=" * 60)
@@ -350,11 +353,11 @@ def main():
     relatar(mods, tab, pc)
     veredito(mods, tab, pc)
 
-    tab.to_csv(SAIDA / "visao_geral.csv", index=False)
-    pc.to_csv(SAIDA / "pareado_por_condicao.csv", index=False)
+    tab.to_csv(TABELAS / "visao_geral.csv", index=False)
+    pc.to_csv(TABELAS / "pareado_por_condicao.csv", index=False)
     p("")
-    p(f"  {(SAIDA / 'visao_geral.csv').relative_to(RAIZ)}")
-    p(f"  {(SAIDA / 'pareado_por_condicao.csv').relative_to(RAIZ)}")
+    p(f"  {(TABELAS / 'visao_geral.csv').relative_to(RAIZ)}")
+    p(f"  {(TABELAS / 'pareado_por_condicao.csv').relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         desenhar(mods, estilo(mods), tab, pc)

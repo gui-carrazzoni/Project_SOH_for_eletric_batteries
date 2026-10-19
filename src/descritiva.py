@@ -6,9 +6,10 @@ Analise descritiva da tabela analitica: um atributo numerico e um nominal.
     python descritiva.py                 # tabelas + graficos
     python descritiva.py --sem-graficos   # so as tabelas
 
-Le saida_nasa/correlacao/tabela_modelagem.csv (tabela integrada, 2.794 descargas)
-e saida_nasa/preprocessado/dados_modelagem.csv (apos a limpeza, 2.719) e escreve
-em saida_nasa/descritiva/.
+Le saida_nasa/correlacao/tabelas/tabela_modelagem.csv (tabela integrada, 2.794
+descargas) e saida_nasa/preprocessado/tabelas/dados_modelagem.csv (apos a
+limpeza, 2.719) e escreve em saida_nasa/descritiva/: as tabelas em tabelas/, os
+graficos em figuras/.
 
 **Atributo numerico: SOH.** E a variavel-alvo — a razao entre a capacidade medida
 na descarga e a capacidade de referencia da celula naquela condicao. Descrever o
@@ -34,9 +35,10 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-BRUTA = RAIZ / "saida_nasa" / "correlacao" / "tabela_modelagem.csv"
-LIMPA = RAIZ / "saida_nasa" / "preprocessado" / "dados_modelagem.csv"
+BRUTA = RAIZ / "saida_nasa" / "correlacao" / "tabelas" / "tabela_modelagem.csv"
+LIMPA = RAIZ / "saida_nasa" / "preprocessado" / "tabelas" / "dados_modelagem.csv"
 SAIDA = RAIZ / "saida_nasa" / "descritiva"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 # Paleta categorica validada para daltonismo (modo claro), slots 1..8 em ordem fixa
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -123,13 +125,13 @@ def eta_quadrado(mods, d, nominal, alvo):
 
 def tabelas(mods, bruta, d):
     pd = mods["pandas"]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
 
     est = pd.DataFrame([
         dict(atributo="SOH (%)", **resumo_numerico(mods, d[ALVO])),
         dict(atributo="capacity (Ah)", **resumo_numerico(mods, d["capacity"])),
     ])
-    est.to_csv(SAIDA / "estatisticas_numericas.csv", index=False)
+    est.to_csv(TABELAS / "estatisticas_numericas.csv", index=False)
 
     g = d.groupby(NOMINAL)
     freq = pd.DataFrame({
@@ -149,7 +151,7 @@ def tabelas(mods, bruta, d):
                 lambda c: c[["cycle", ALVO]].corr().iloc[0, 1]).median()),
     }).sort_values("descargas", ascending=False)
     freq.index.name = "condicao_de_ensaio"
-    freq.to_csv(SAIDA / "frequencias_condicao.csv")
+    freq.to_csv(TABELAS / "frequencias_condicao.csv")
 
     por_grupo = d.groupby(["battery_id", NOMINAL]).apply(
         lambda x: x[["cycle", ALVO]].corr().iloc[0, 1])
@@ -216,7 +218,8 @@ def titulo_figura(plt, fig, texto, sub):
 
 
 def salvar(plt, fig, nome):
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 

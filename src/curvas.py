@@ -7,7 +7,7 @@ Areas sob a curva de descarga e descritores de forma, uma linha por descarga.
     python curvas.py --remontar   # ignora o cache e rele as 2.794 curvas
     python curvas.py --amostra 50 # so as 50 primeiras, para teste rapido
 
-Escreve saida_nasa/curvas/features_curvas.csv.
+Escreve saida_nasa/curvas/tabelas/features_curvas.csv.
 
 Este e o passo 0: le as curvas brutas **uma unica vez** e entrega o que os tres
 estudos seguintes precisam — as areas (item 4), a carga integrada em Ah (item 3)
@@ -85,6 +85,9 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 DADOS = RAIZ / "cleaned_nasa_dataset"
 SAIDA = RAIZ / "saida_nasa" / "curvas"
+TABELAS = SAIDA / "tabelas"
+# As metricas de cada descarga, de graficos_nasa.py.
+DESCARGAS = RAIZ / "saida_nasa" / "geral" / "tabelas" / "metricas_descargas.csv"
 
 N_REAMOSTRA = 50           # pontos da curva de tensao em tempo normalizado
 MIN_PONTOS_CARGA = 5       # abaixo disso a descarga nao rende agregacao
@@ -115,8 +118,8 @@ def checar():
         p("ERRO: faltam dependencias: " + ", ".join(faltando))
         p("    python -m pip install -r requirements.txt")
         sys.exit(1)
-    if not (RAIZ / "saida_nasa" / "metricas_descargas.csv").exists():
-        p("ERRO: saida_nasa/metricas_descargas.csv nao existe.")
+    if not DESCARGAS.exists():
+        p(f"ERRO: {DESCARGAS.relative_to(RAIZ)} nao existe.")
         p("    Rode antes: python graficos_nasa.py")
         sys.exit(1)
     if not DADOS.exists():
@@ -263,14 +266,14 @@ def forma_comum(np, t, v, i, temp, energia):
 
 def montar(mods, remontar=False, amostra=None):
     np, pd = mods["numpy"], mods["pandas"]
-    cache = SAIDA / "features_curvas.csv"
+    cache = TABELAS / "features_curvas.csv"
     if cache.exists() and not remontar and amostra is None:
         p(f"  cache: {cache.relative_to(RAIZ)}")
         return pd.read_csv(cache)
 
     # metricas_descargas.csv ja traz condicao, ciclo e SoH por descarga: e a
     # espinha da tabela, e daqui so acrescentamos o que exige ler a curva.
-    m = pd.read_csv(RAIZ / "saida_nasa" / "metricas_descargas.csv")
+    m = pd.read_csv(DESCARGAS)
     if amostra:
         m = m.head(amostra)
     p(f"  lendo {len(m)} curvas de descarga...")
@@ -296,7 +299,7 @@ def montar(mods, remontar=False, amostra=None):
     if vazias:
         p(f"  {vazias} curvas sem trecho sob carga utilizavel (sem features)")
 
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     if amostra is None:
         df.to_csv(cache, index=False)
         p(f"  {cache.relative_to(RAIZ)}  ({len(df)} x {df.shape[1]})")
@@ -330,8 +333,8 @@ def resumir(mods, df):
         p(f"    {lin.condicao:<14} n={lin.descargas:>4}  "
           f"{lin.carga_Ah:>6.3f} Ah  {lin.energia_Wh:>6.3f} Wh  "
           f"{lin.tensao_Vs:>8.0f} V.s  {lin.duracao_min:>6.1f} min")
-    g.to_csv(SAIDA / "resumo_areas_por_condicao.csv")
-    p(f"\n  {(SAIDA / 'resumo_areas_por_condicao.csv').relative_to(RAIZ)}")
+    g.to_csv(TABELAS / "resumo_areas_por_condicao.csv")
+    p(f"\n  {(TABELAS / 'resumo_areas_por_condicao.csv').relative_to(RAIZ)}")
 
 
 def main():

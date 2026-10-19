@@ -6,7 +6,8 @@ Analise e graficos do NASA Li-ion Battery Aging Dataset.
     python graficos_nasa.py                # tudo
     python graficos_nasa.py --sem-graficos # so as tabelas de metricas
 
-Escreve em saida_nasa/: metricas por ensaio, resumo por bateria e os PNGs.
+Escreve em saida_nasa/geral/: as metricas por ensaio e o resumo por bateria em
+tabelas/, os PNGs em figuras/.
 
 O ponto central: neste dataset a capacidade **so e comparavel dentro da mesma
 condicao de ensaio**. A mesma bateria descarregada a 4 A entrega 1,42 Ah a 24 C
@@ -26,7 +27,8 @@ from pathlib import Path
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
 DADOS = RAIZ / "cleaned_nasa_dataset"
-SAIDA = RAIZ / "saida_nasa"
+SAIDA = RAIZ / "saida_nasa" / "geral"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 # Paleta categorica validada para daltonismo (modo claro), slots 1..8 em ordem fixa
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -207,7 +209,7 @@ def titulo_figura(fig, texto, sub):
 
 
 def salvar(fig, nome):
-    fig.savefig(SAIDA / "graficos" / nome, bbox_inches="tight")
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     p(f"  {nome}")
 
 
@@ -218,7 +220,7 @@ def desenhar(mods, d, z):
     from matplotlib.lines import Line2D
     np, pd = mods["numpy"], mods["pandas"]
     estilo(plt)
-    (SAIDA / "graficos").mkdir(parents=True, exist_ok=True)
+    FIGURAS.mkdir(parents=True, exist_ok=True)
     bons = d[d.alerta == ""]
 
     # -- 01 capacidade por corrente, colorida por temperatura ambiente
@@ -420,7 +422,7 @@ def main():
     args = ap.parse_args()
 
     mods = checar()
-    SAIDA.mkdir(exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
 
     p("Lendo os ensaios...")
     d, z = montar_metricas(mods)
@@ -429,11 +431,11 @@ def main():
     cols_d = ["battery_id", "ciclo", "ciclo_na_condicao", "test_id", "uid", "filename",
               "condicao", "corrente_A", "ambient_temperature", "Capacity", "cap_ref_Ah",
               "SoH_%", "duracao_min", "V_final", "T_max_C", "alerta"]
-    d[cols_d].to_csv(SAIDA / "metricas_descargas.csv", index=False)
+    d[cols_d].to_csv(TABELAS / "metricas_descargas.csv", index=False)
     z[["battery_id", "ciclo", "test_id", "uid", "filename", "ambient_temperature",
        "Re_ohm", "Rct_ohm", "SoH_%", "alerta"]].to_csv(
-        SAIDA / "metricas_impedancia.csv", index=False)
-    resumo.to_csv(SAIDA / "resumo_baterias.csv", index=False)
+        TABELAS / "metricas_impedancia.csv", index=False)
+    resumo.to_csv(TABELAS / "resumo_baterias.csv", index=False)
 
     p(f"  {len(d)} descargas, {len(z)} ensaios de impedancia, "
       f"{resumo.battery_id.nunique()} baterias")
@@ -447,7 +449,7 @@ def main():
         p("Graficos:")
         desenhar(mods, d, z)
 
-    p(f"\nSaida em {SAIDA.name}/")
+    p(f"\nSaida em {SAIDA.relative_to(RAIZ)}/")
 
 
 if __name__ == "__main__":

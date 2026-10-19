@@ -13,6 +13,8 @@ comparacao direta:
     saida_nasa/cluster/grupo_corrente_temperatura/capacidade/
     saida_nasa/cluster/grupo_corrente_temperatura_corte/capacidade/
 
+as tabelas em tabelas/ e os graficos em figuras/.
+
 **Os dois esquemas de grupo.** O primeiro e o `test_condition` que o projeto ja
 usa: corrente x temperatura ambiente. O segundo acrescenta a tensao de corte da
 descarga, o terceiro eixo do protocolo — 2.0 a 2.7 V conforme a bateria, e
@@ -55,7 +57,7 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "curvas" / "features_curvas.csv"
+ENTRADA = RAIZ / "saida_nasa" / "curvas" / "tabelas" / "features_curvas.csv"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -284,8 +286,9 @@ def titulo_figura(plt, fig, texto, sub):
     fig.tight_layout(rect=[0, 0, 1, topo - len(linhas) * alt - 0.015])
 
 
-def desenhar(mods, plt, d, rotulos, fade, resumo, saida, nome):
+def desenhar(mods, plt, d, rotulos, fade, resumo, figuras, nome):
     np, pd = mods["numpy"], mods["pandas"]
+    figuras.mkdir(parents=True, exist_ok=True)
     d = d.assign(grupo=rotulos)
     grupos = list(resumo.index)
 
@@ -312,7 +315,7 @@ def desenhar(mods, plt, d, rotulos, fade, resumo, saida, nome):
                   "Uma linha por celula. Capacidade integrada ate o piso comum de 2.7 V, "
                   "a unica base que se compara entre celulas de corte diferente. "
                   "Um grupo coerente mostra trajetorias parecidas dentro do painel.")
-    fig.savefig(saida / "01_capacidade_por_ciclo.png", bbox_inches="tight")
+    fig.savefig(figuras / "01_capacidade_por_ciclo.png", bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}/01_capacidade_por_ciclo.png")
 
@@ -338,21 +341,22 @@ def desenhar(mods, plt, d, rotulos, fade, resumo, saida, nome):
                   "Cada ponto e uma celula. Caixa estreita significa que o grupo reune "
                   "celulas que degradam no mesmo ritmo — e o teste de se o agrupamento "
                   "esta separando o que deveria.")
-    fig.savefig(saida / "02_taxa_de_fade.png", bbox_inches="tight")
+    fig.savefig(figuras / "02_taxa_de_fade.png", bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}/02_taxa_de_fade.png")
 
 
 def rodar(mods, d, rotulos, nome, graficos):
     saida = RAIZ / "saida_nasa" / "cluster" / nome / "capacidade"
-    saida.mkdir(parents=True, exist_ok=True)
+    tabelas = saida / "tabelas"
+    tabelas.mkdir(parents=True, exist_ok=True)
     fade, resumo, val = estudar(mods, d, rotulos, nome)
     relatar(nome, resumo, val)
-    fade.to_csv(saida / "fade_por_celula.csv", index=False)
-    resumo.to_csv(saida / "resumo_por_grupo.csv")
-    val.to_csv(saida / "validacao_integracao.csv")
+    fade.to_csv(tabelas / "fade_por_celula.csv", index=False)
+    resumo.to_csv(tabelas / "resumo_por_grupo.csv")
+    val.to_csv(tabelas / "validacao_integracao.csv")
     if graficos:
-        desenhar(mods, estilo(mods), d, rotulos, fade, resumo, saida, nome)
+        desenhar(mods, estilo(mods), d, rotulos, fade, resumo, saida / "figuras", nome)
     return fade, resumo
 
 

@@ -8,8 +8,8 @@ Classificacao de fim de vida com k vizinhos mais proximos (kNN).
     python classificacao.py --sem-referencias  # so o kNN, sem as familias da literatura
     python classificacao.py --sem-graficos     # so as tabelas
 
-Le saida_nasa/normalizado/dados_normalizados.csv e escreve em
-saida_nasa/classificacao/.
+Le saida_nasa/normalizado/tabelas/dados_normalizados.csv e escreve em
+saida_nasa/classificacao/: as tabelas em tabelas/, os graficos em figuras/.
 
 **A tarefa.** Cada descarga e rotulada fim de vida (SOH < 80%, o limiar do
 artigo) ou saudavel. As classes ja saem quase equilibradas — 44% de fim de vida
@@ -73,13 +73,25 @@ balanceada em vez de substitui-la.
 por descarga (a mesma celula dos dois lados), mostra o vazamento que o artigo
 aponta em [13]: o vizinho mais proximo de uma descarga passa a ser, quase
 sempre, outra descarga da mesma celula, e o modelo acerta por reconhecer a
-celula. vazamento.csv registra quanto.
+celula. O terminal mostra quanto.
 
 **Familias da literatura como referencia.** Regressao logistica, SVM, Random
 Forest e Gradient Boosting rodam no mesmo protocolo e com o mesmo preparo, com
 os hiperparametros padrao do scikit-learn. Nao decidem nada: dizem onde o kNN
 fica. Sao o motivo de o scikit-learn entrar no projeto — o kNN caberia em numpy,
 as quatro nao.
+
+**Os resultados de cada algoritmo.** As quatro referencias saem com o mesmo
+detalhe do kNN: matriz de confusao na validacao e no teste
+(03_matrizes_de_confusao.png), todas as metricas com o intervalo por celulas
+(04_metricas_por_algoritmo.png), as curvas ROC (05_curvas_roc.png) e o erro em
+cada celula de teste (06_erro_por_celula.png). Nada disso escolhe nada; e o que
+permite discutir os cinco lado a lado, e nao so o kNN.
+
+**Onde fica cada coisa.** As tabelas vao para saida_nasa/classificacao/tabelas/
+e os graficos para saida_nasa/classificacao/figuras/, numerados na ordem do
+artigo: validacao (01 e 02), teste de todos os algoritmos (03 a 06), os erros do
+kNN ao longo dos ciclos (07) e a variante pos-hoc (08).
 
 **Variante pos-hoc: vizinhos so do mesmo grupo de comportamento.** Na analise
 dos erros do teste, mais da metade dos vizinhos que enganaram B0018 vinha de
@@ -101,15 +113,17 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "normalizado" / "dados_normalizados.csv"
+ENTRADA = RAIZ / "saida_nasa" / "normalizado" / "tabelas" / "dados_normalizados.csv"
 # So pelo numero do ciclo: a tabela normalizada traz o ciclo escalonado, e o
 # eixo dos graficos e o CSV de previsoes precisam do ciclo de verdade.
-BRUTA = RAIZ / "saida_nasa" / "preprocessado" / "dados_modelagem.csv"
+BRUTA = RAIZ / "saida_nasa" / "preprocessado" / "tabelas" / "dados_modelagem.csv"
 # So a variante pos-hoc le o agrupamento do modulo 2: os perfis de
 # comportamento saem das curvas, e o k e o que grupos.py escolheu.
-CURVAS = RAIZ / "saida_nasa" / "curvas" / "features_curvas.csv"
-GRUPOS = RAIZ / "saida_nasa" / "cluster" / "agrupamento" / "grupos_comportamento.csv"
+CURVAS = RAIZ / "saida_nasa" / "curvas" / "tabelas" / "features_curvas.csv"
+GRUPOS = (RAIZ / "saida_nasa" / "cluster" / "agrupamento" / "tabelas"
+          / "grupos_comportamento.csv")
 SAIDA = RAIZ / "saida_nasa" / "classificacao"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 # Paleta categorica validada para daltonismo (modo claro), slots 1..8 em ordem fixa
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -136,6 +150,15 @@ COR_CONJUNTO = {"relativas": (PAL[0], "D"), "brutas": (PAL[7], "o"),
 # No terminal e nos CSV os nomes ficam sem acento, como no resto do projeto; o
 # acento volta so nos graficos, que vao para o artigo.
 ROTULO_MODELO = {"Regressao logistica": "Regressão logística"}
+# Apelido no terminal, onde a tabela por celula tem uma coluna por modelo, e
+# nome das colunas de cada referencia em predicoes_teste.csv.
+CURTO = {"Regressao logistica": "logistica", "SVM (RBF)": "SVM",
+         "Random Forest": "RF", "Gradient Boosting": "GB"}
+SLUG = {"Regressao logistica": "regressao_logistica", "SVM (RBF)": "svm",
+        "Random Forest": "random_forest", "Gradient Boosting": "gradient_boosting"}
+# Rampa sequencial do erro: o laranja que marca os erros nos outros graficos, do
+# quase-nada ao escuro, com a luminosidade (OKLCH) caindo a cada passo.
+SEQ_ERRO = ["#f0efec", "#f7d9c9", "#f4b394", "#ef8c5f", "#eb6834", "#bf4a1b", "#86300c"]
 
 # k impar: no voto por maioria entre duas classes nao ha empate.
 GRADE_K = [1, 3, 5, 7, 9, 11, 15, 21, 25, 31, 41, 51, 61, 81, 101, 151, 201]
@@ -213,6 +236,11 @@ def conjuntos(df):
 def condicao(c):
     """'2 A / 24 C' -> '2 A / 24 °C', para os graficos."""
     return c[:-1] + "°C" if c.endswith(" C") else c
+
+
+def curto(nome):
+    """'kNN (k = 25)' -> 'kNN'; as referencias pelo apelido de CURTO."""
+    return CURTO.get(nome, nome.split(" (")[0])
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +507,7 @@ def etapa_comparacao(mods, tr, conj, k_conj, refs):
     aleat = particao_aleatoria(mods, y)
     nome_knn = f"kNN (k = {k_conj['relativas']})"
     modelos = {nome_knn: None, **refs}
-    linhas = []
+    linhas, pred_val = [], {}
     for nome, modelo in modelos.items():
         t0 = time.time()
         for n, cols in conj.items():
@@ -490,11 +518,12 @@ def etapa_comparacao(mods, tr, conj, k_conj, refs):
                 esquemas.append(("aleatoria por descarga", aleat))
             for esquema, grupos in esquemas:
                 pred, escore = prever_fora(mods, m, X, y, grupos)
-                if modelo is None and n == "relativas" and grupos is cel:
-                    pred_knn = pred
+                if n == "relativas" and grupos is cel:
+                    pred_val[nome] = pred
                 met = metricas(np, y, pred)
                 # No CSV o kNN e "kNN" e o k vai na coluna propria: cada conjunto
-                # tem o seu k, e o nome com o k do relativo enganaria.
+                # tem o seu k, e o nome com o k do relativo enganaria. A matriz de
+                # confusao (vp a vn) fica em todas as linhas.
                 linhas.append({"modelo": "kNN" if modelo is None else nome,
                                "atributos": n, "validacao": esquema,
                                "k": k_conj[n] if modelo is None else None,
@@ -502,7 +531,9 @@ def etapa_comparacao(mods, tr, conj, k_conj, refs):
                                "sensibilidade": met["sensibilidade"],
                                "especificidade": met["especificidade"],
                                "f1_fim_de_vida": met["f1_fim_de_vida"],
-                               "auc": auc(np, y, escore)})
+                               "auc": auc(np, y, escore),
+                               **{c: met[c] for c in ("precisao", "acuracia",
+                                                      "vp", "fn", "fp", "vn")}})
         p(f"  {nome:<22} {time.time() - t0:>5.0f}s")
     comp = pd.DataFrame(linhas)
     comp["k"] = comp.k.astype("Int64")
@@ -545,24 +576,29 @@ def etapa_comparacao(mods, tr, conj, k_conj, refs):
 
     perto, media = mesma_celula(mods, tr[conj["relativas"]].to_numpy(), cel, aleat,
                                 k_conj["relativas"])
-    vaz = pd.DataFrame([{"k": k_conj["relativas"],
-                         "vizinho_mais_proximo_da_mesma_celula": perto,
-                         "vizinhos_da_mesma_celula_media": media}])
     p(f"  particao aleatoria: o vizinho mais proximo e da mesma celula em {perto:.1%}")
     p(f"  das descargas, e {media:.1%} dos {k_conj['relativas']} vizinhos tambem, "
       f"em media")
 
     # Quanto o acerto varia de uma celula para outra: e essa variacao que decide
-    # se 8 celulas de teste bastam para ordenar algoritmos.
-    por_cel = (pd.DataFrame({"battery_id": cel, "fim_de_vida": y, "acerto": pred_knn == y})
+    # se 8 celulas de teste bastam para ordenar algoritmos. A coluna `acuracia` e
+    # a do kNN; cada referencia ganha a sua.
+    por_cel = (pd.DataFrame({"battery_id": cel, "fim_de_vida": y,
+                             "acerto": pred_val[nome_knn] == y})
                .groupby("battery_id")
                .agg(descargas=("acerto", "size"), fracao_fim_de_vida=("fim_de_vida", "mean"),
                     acuracia=("acerto", "mean"))
                .reset_index())
-    q = por_cel.acuracia.quantile([0, 0.25, 0.5, 1]).to_numpy()
-    p(f"  acerto do kNN por celula de treino: de {q[0]:.0%} a {q[3]:.0%} "
-      f"(quartil inferior {q[1]:.0%}, mediana {q[2]:.0%})")
-    return comp, piv, vaz, por_cel, nome_knn
+    for nome in refs:
+        por_cel[f"acuracia_{SLUG[nome]}"] = por_cel.battery_id.map(
+            pd.Series(pred_val[nome] == y).groupby(cel).mean())
+    p("  acerto por celula de treino, quando ela e a deixada de fora:")
+    for nome in modelos:
+        col = "acuracia" if nome == nome_knn else f"acuracia_{SLUG[nome]}"
+        q = por_cel[col].quantile([0, 0.25, 0.5, 1]).to_numpy()
+        p(f"    {nome:<22} de {q[0]:.0%} a {q[3]:.0%} "
+          f"(quartil inferior {q[1]:.0%}, mediana {q[2]:.0%})")
+    return comp, piv, por_cel, nome_knn
 
 
 def etapa_teste(mods, tr, te, conj, k, refs, nome_knn):
@@ -586,6 +622,12 @@ def etapa_teste(mods, tr, te, conj, k, refs, nome_knn):
     amostras_auc = reamostrar(mods, y_te, escores, cel_te, lambda yy, s: auc(np, yy, s))
     amostras_f1 = reamostrar(mods, y_te, preds, cel_te,
                              lambda yy, pr: metricas(np, yy, pr)["f1_fim_de_vida"])
+    # As outras taxas da matriz de confusao, com o mesmo intervalo: o grafico por
+    # algoritmo mostra todas. A precisao fica indefinida na reamostragem em que o
+    # modelo nao da alarme nenhum, e o percentil ignora essas.
+    amostras_taxas = {c: reamostrar(mods, y_te, preds, cel_te,
+                                    lambda yy, pr, c=c: metricas(np, yy, pr)[c])
+                      for c in ("acuracia", "sensibilidade", "especificidade", "precisao")}
     f1_knn = metricas(np, y_te, pred)["f1_fim_de_vida"]
     # Bonferroni: com uma comparacao por referencia, cada intervalo pareado
     # precisa de 95% divididos entre elas para o conjunto manter os 95%.
@@ -601,6 +643,9 @@ def etapa_teste(mods, tr, te, conj, k, refs, nome_knn):
             amostras_auc[nome], [2.5, 97.5])
         lin["f1_ic95_inferior"], lin["f1_ic95_superior"] = np.percentile(
             amostras_f1[nome], [2.5, 97.5])
+        for c, am in amostras_taxas.items():
+            lin[f"{c}_ic95_inferior"], lin[f"{c}_ic95_superior"] = np.nanpercentile(
+                am[nome], [2.5, 97.5])
         if nome != nome_knn:
             dif = amostras[nome] - amostras[nome_knn]
             lin["diferenca_para_knn"] = m["acuracia_balanceada"] - acuracia_balanceada(
@@ -681,21 +726,40 @@ def etapa_teste(mods, tr, te, conj, k, refs, nome_knn):
     prev = te[["battery_id", "test_condition", "ciclo", ALVO, "fim_de_vida"]].assign(
         previsto=pred, votos_fim_de_vida=votos, acerto=pred == y_te,
         vizinhos_mais_proximos=viz)
+    # As referencias ao lado: a classe prevista e o escore que a AUC ordena.
+    for nome in refs:
+        prev[f"previsto_{SLUG[nome]}"] = preds[nome]
+        prev[f"escore_{SLUG[nome]}"] = escores[nome]
 
-    por = (prev.assign(alarme_falso=(pred == 1) & (y_te == 0),
-                       nao_detectado=(pred == 0) & (y_te == 1))
-           .groupby(["battery_id", "test_condition"])
-           .agg(descargas=("acerto", "size"), fim_de_vida_real=("fim_de_vida", "sum"),
-                fim_de_vida_previsto=("previsto", "sum"), acuracia=("acerto", "mean"),
-                alarmes_falsos=("alarme_falso", "sum"),
-                nao_detectados=("nao_detectado", "sum"), soh_minimo=(ALVO, "min"))
-           .reset_index())
+    # Por celula, para cada modelo: onde cada um erra, e de que jeito.
+    por = []
+    for nome, pr in preds.items():
+        t = (te[["battery_id", "test_condition", "fim_de_vida", ALVO]]
+             .assign(previsto=pr, acerto=pr == y_te, alarme_falso=(pr == 1) & (y_te == 0),
+                     nao_detectado=(pr == 0) & (y_te == 1))
+             .groupby(["battery_id", "test_condition"])
+             .agg(descargas=("acerto", "size"), fim_de_vida_real=("fim_de_vida", "sum"),
+                  fim_de_vida_previsto=("previsto", "sum"), acuracia=("acerto", "mean"),
+                  alarmes_falsos=("alarme_falso", "sum"),
+                  nao_detectados=("nao_detectado", "sum"), soh_minimo=(ALVO, "min"))
+             .reset_index())
+        t.insert(0, "modelo", nome)
+        por.append(t)
+    por = pd.concat(por, ignore_index=True)
     p("")
     p(f"  por celula, kNN (k = {k}):")
-    for r in por.itertuples(index=False):
+    for r in por[por.modelo == nome_knn].itertuples(index=False):
         p(f"    {r.battery_id} {r.test_condition:<11} {r.descargas:>4} descargas, "
           f"{r.fim_de_vida_real:>3} em fim de vida, acerto {r.acuracia:.0%}, "
           f"{r.alarmes_falsos} alarme(s) falso(s), {r.nao_detectados} nao detectado(s)")
+    if refs:
+        tab = por.pivot(index=["battery_id", "test_condition"], columns="modelo",
+                        values="acuracia")[list(preds)]
+        p("")
+        p("  acerto por celula, todos os algoritmos:")
+        p(f"    {'':<17} " + " ".join(f"{curto(n):>9}" for n in tab.columns))
+        for (b, c), r in tab.iterrows():
+            p(f"    {b} {c:<11} " + " ".join(f"{v:>9.0%}" for v in r))
     erros = prev[~prev.acerto]
     if len(erros):
         perto = (erros[ALVO] - FIM_DE_VIDA).abs() < PERTO_DO_LIMIAR
@@ -784,7 +848,8 @@ def titulo_figura(plt, fig, texto, sub):
 
 
 def salvar(plt, fig, nome):
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -893,92 +958,6 @@ def fig_hierarquia(mods, plt, piv, nome_knn):
     salvar(plt, fig, "02_protocolo_atributos_algoritmo.png")
 
 
-def fig_teste(mods, plt, res, piv, nome_knn):
-    """Teste com intervalo, ao lado da validacao: o ranking se sustenta?"""
-    np = mods["numpy"]
-    t = res.set_index("modelo")
-    refs = [m for m in piv.sort_values("relativas", ascending=False).index if m != nome_knn]
-    ordem = [nome_knn] + refs
-    t, cv = t.loc[ordem], piv.relativas.loc[ordem]
-    n = len(t)
-    fig, ax = plt.subplots(figsize=(10, 0.62 * n + 3.1))
-    ys = np.arange(n)[::-1]
-    ax.hlines(ys, 100 * t.ic95_inferior, 100 * t.ic95_superior, color=PAL[0],
-              linewidth=2, zorder=2)
-    ax.scatter(100 * t.acuracia_balanceada, ys, s=80, marker="D", color=PAL[0],
-               edgecolors=SURF, linewidths=1.5, zorder=3,
-               label="teste: 8 células, com IC 95% por reamostragem de células")
-    ax.scatter(100 * cv, ys, s=70, marker="o", facecolors=SURF, edgecolors=INK2,
-               linewidths=1.6, zorder=3,
-               label="validação: 25 células de treino, uma de fora por vez")
-    ax.axvline(50, color=INK2, linewidth=1, linestyle=":", zorder=0)
-    ax.text(50.5, -0.55, "acaso", fontsize=9, color=INK2, va="bottom", ha="left")
-    ax.set_yticks(ys, [ROTULO_MODELO.get(m, m) for m in ordem])
-    for tk in ax.get_yticklabels():
-        if tk.get_text() == nome_knn:
-            tk.set_fontweight("bold")
-            tk.set_color(INK)
-    ax.set_xlim(45, 100)
-    ax.set_ylim(-0.7, n - 0.3)
-    ax.set_xlabel("acurácia balanceada (%)")
-    ax.grid(axis="y", visible=False)
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.legend(fontsize=9, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=1,
-              borderaxespad=0.4)
-
-    pos_cv = int((cv > cv[nome_knn]).sum()) + 1
-    pos_te = int((t.acuracia_balanceada > t.acuracia_balanceada[nome_knn]).sum()) + 1
-    sub = ("Acurácia balanceada com os atributos relativos ao início de vida. O losango é o "
-           "teste nas 8 células nunca vistas, com o intervalo de 95% de reamostrar células "
-           "inteiras; o círculo vazado é a validação nas 25 células de treino. "
-           f"O kNN fica em {pos_cv}º de {n} na validação e em {pos_te}º no teste.")
-    if refs:
-        fora = [r for r in t.iloc[1:].itertuples()
-                if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0]
-        sub += (f" Medida em pares, nas mesmas reamostragens, a diferença para o kNN exclui "
-                f"o zero em {len(fora)} das {len(refs)} referências.")
-    titulo_figura(plt, fig, "Validação e teste: a ordem dos algoritmos muda", sub)
-    salvar(plt, fig, "03_teste_comparacao.png")
-
-
-def fig_confusao(mods, plt, met, k):
-    np = mods["numpy"]
-    from matplotlib.colors import LinearSegmentedColormap
-    m = np.array([[met["vn"], met["fp"]], [met["fn"], met["vp"]]], dtype=float)
-    frac = m / m.sum(axis=1, keepdims=True)
-    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
-    fig, ax = plt.subplots(figsize=(6.8, 5.6))
-    ax.imshow(frac, cmap=cmap, vmin=0, vmax=1)
-    rotulos = ["saudável", "fim de vida"]
-    for i in range(2):
-        for j in range(2):
-            ax.text(j, i, f"{int(m[i, j])}\n{virg(100 * frac[i, j], 0)}%", ha="center",
-                    va="center", fontsize=14, color=_tinta(cmap(frac[i, j])),
-                    fontweight="bold" if i == j else "normal", linespacing=1.4)
-    ax.set_xticks([0, 1], rotulos)
-    ax.set_yticks([0, 1], rotulos)
-    ax.xaxis.tick_top()
-    ax.xaxis.set_label_position("top")
-    ax.set_xlabel("previsto pelo kNN")
-    ax.set_ylabel(f"real (SOH < {FIM_DE_VIDA:.0f}% = fim de vida)")
-    ax.set_xticks([0.5], minor=True)
-    ax.set_yticks([0.5], minor=True)
-    ax.grid(which="minor", color=SURF, linewidth=3)
-    ax.grid(which="major", visible=False)
-    ax.tick_params(which="both", length=0)
-    for lado in ax.spines.values():
-        lado.set_visible(False)
-    sub = (f"{met['descargas']} descargas de 8 células que não participaram de nenhuma "
-           f"escolha; kNN com k = {k} e atributos relativos ao início de vida. Acurácia "
-           f"balanceada de {virg(100 * met['acuracia_balanceada'])}% (IC 95% por "
-           f"reamostragem de células: {virg(100 * met['ic95_inferior'], 0)} a "
-           f"{virg(100 * met['ic95_superior'], 0)}%). Percentuais sobre cada classe real: "
-           f"a diagonal é a taxa de acerto de cada uma.")
-    titulo_figura(plt, fig, "Teste em células nunca vistas", sub)
-    salvar(plt, fig, "04_matriz_confusao.png")
-
-
 def fig_celulas(mods, plt, prev, k):
     from matplotlib.lines import Line2D
     grupos = list(prev.groupby(["battery_id", "test_condition"], sort=True))
@@ -1022,7 +1001,7 @@ def fig_celulas(mods, plt, prev, k):
            f"não detectado. {virg(100 * perto, 0)}% dos {len(erros)} erros ficam a menos de "
            f"{virg(PERTO_DO_LIMIAR, 0)} p.p. do limiar.")
     titulo_figura(plt, fig, "Onde o kNN erra", sub)
-    salvar(plt, fig, "05_teste_por_celula.png")
+    salvar(plt, fig, "07_teste_por_celula.png")
 
 
 def fig_roc(mods, plt, y, escores, res):
@@ -1057,7 +1036,7 @@ def fig_roc(mods, plt, y, escores, res):
            f"{virg(r.auc, 2)} (IC 95% por reamostragem de células: {virg(r.auc_ic95_inferior, 2)} "
            f"a {virg(r.auc_ic95_superior, 2)}).")
     titulo_figura(plt, fig, "Curvas ROC no teste", sub)
-    salvar(plt, fig, "07_curvas_roc.png")
+    salvar(plt, fig, "05_curvas_roc.png")
 
 
 def fig_variante(mods, plt, curva, resumo):
@@ -1094,7 +1073,226 @@ def fig_variante(mods, plt, curva, resumo):
            f"{virg(100 * resumo['mesmo grupo'])}%. Cada grupo oferece em mediana "
            f"{resumo['oferta_mediana']:.0f} células como vizinhas, contra 24 sem a restrição.")
     titulo_figura(plt, fig, "Vizinhos só do mesmo grupo de comportamento", sub)
-    salvar(plt, fig, "06_variante_mesmo_grupo.png")
+    salvar(plt, fig, "08_variante_mesmo_grupo.png")
+
+
+# ---------------------------------------------------------------------------
+# graficos por algoritmo: as referencias com o mesmo detalhe do kNN
+# ---------------------------------------------------------------------------
+def ordem_modelos(piv, nome_knn):
+    """O kNN e depois as referencias pela acuracia balanceada na validacao, como em 02 e 03."""
+    return [nome_knn] + [m for m in piv.sort_values("relativas", ascending=False).index
+                         if m != nome_knn]
+
+
+def validacao_relativas(comp, nome_knn):
+    """As linhas de comparacao.csv com os atributos relativos, uma celula de fora por vez."""
+    v = comp[(comp.atributos == "relativas") & (comp.validacao == "uma celula de fora")]
+    return v.assign(modelo=v.modelo.replace({"kNN": nome_knn})).set_index("modelo")
+
+
+def lista(itens):
+    """['a', 'b', 'c'] -> 'a, b e c'."""
+    return itens[0] if len(itens) == 1 else ", ".join(itens[:-1]) + " e " + itens[-1]
+
+
+def fig_matrizes(mods, plt, comp, res, ordem):
+    """A matriz de confusao de cada algoritmo, na validacao e no teste."""
+    np = mods["numpy"]
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
+    nome_knn = ordem[0]
+    etapas = (("validação", validacao_relativas(comp, nome_knn).loc[ordem]),
+              ("teste", res.set_index("modelo").loc[ordem]))
+    n = len(ordem)
+    fig, axes = plt.subplots(2, n, figsize=(2.45 * n + 1.2, 8.0), squeeze=False)
+    rotulos = ["saudável", "fim de vida"]
+    for i, (etapa, t) in enumerate(etapas):
+        for j, nome in enumerate(ordem):
+            ax, r = axes[i, j], t.loc[nome]
+            m = np.array([[r.vn, r.fp], [r.fn, r.vp]], dtype=float)
+            frac = m / m.sum(axis=1, keepdims=True)
+            ax.imshow(frac, cmap=cmap, vmin=0, vmax=1)
+            for a in range(2):
+                for b in range(2):
+                    ax.text(b, a, f"{int(m[a, b])}\n{virg(100 * frac[a, b], 0)}%",
+                            ha="center", va="center", fontsize=10.5,
+                            color=_tinta(cmap(frac[a, b])),
+                            fontweight="bold" if a == b else "normal", linespacing=1.3)
+            ax.set_xticks([0, 1], rotulos, fontsize=9)
+            ax.set_yticks([0, 1], rotulos if j == 0 else ["", ""], fontsize=9)
+            ax.set_xticks([0.5], minor=True)
+            ax.set_yticks([0.5], minor=True)
+            ax.grid(which="minor", color=SURF, linewidth=3)
+            ax.grid(which="major", visible=False)
+            ax.tick_params(which="both", length=0)
+            for lado in ax.spines.values():
+                lado.set_visible(False)
+            ax.set_xlabel(f"acurácia balanceada {virg(100 * r.acuracia_balanceada)}%",
+                          fontsize=9.5, color=INK, labelpad=7)
+            if i == 0:
+                ax.set_title(ROTULO_MODELO.get(nome, nome), fontsize=11, color=INK, pad=10,
+                             fontweight="bold" if nome == nome_knn else "normal")
+        axes[i, 0].text(-0.66, 0.5, etapa, transform=axes[i, 0].transAxes, rotation=90,
+                        ha="center", va="center", fontsize=12.5, fontweight="bold", color=INK)
+    v, t = etapas[0][1], etapas[1][1]
+    muda = t.sensibilidade - v.sensibilidade
+    rot = lambda m: ROTULO_MODELO.get(m, m)
+    pc = lambda s, m: f"{virg(100 * s[m], 0)}%"
+    # Ponto como separador de milhar, como manda a norma brasileira: 2.001.
+    total = lambda d: f"{int(d.iloc[0][['vp', 'fn', 'fp', 'vn']].sum()):,}".replace(",", ".")
+    sub = ("Atributos relativos ao início de vida. Em cada matriz, as linhas são a classe real e "
+           "as colunas a prevista; o percentual é sobre a classe real, e a diagonal é a taxa de "
+           "acerto de cada classe: especificidade em cima, sensibilidade embaixo. Validação: as "
+           f"{total(v)} descargas das 25 células de treino, cada célula prevista por um modelo "
+           f"que não a viu. Teste: as {total(t)} descargas das 8 células nunca vistas.")
+    if n > 1:
+        cai, sobe = muda.idxmin(), muda.idxmax()
+        sub += (f" Sensibilidade, da validação para o teste: {rot(cai)}, de "
+                f"{pc(v.sensibilidade, cai)} para {pc(t.sensibilidade, cai)}; {rot(sobe)}, de "
+                f"{pc(v.sensibilidade, sobe)} para {pc(t.sensibilidade, sobe)}.")
+    titulo_figura(plt, fig, "A matriz de confusão de cada algoritmo", sub)
+    salvar(plt, fig, "03_matrizes_de_confusao.png")
+
+
+def fig_metricas(mods, plt, comp, res, ordem):
+    """Todas as metricas de cada algoritmo: o teste com intervalo, ao lado da validacao."""
+    np = mods["numpy"]
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import FixedLocator, FuncFormatter
+    nome_knn = ordem[0]
+    val = validacao_relativas(comp, nome_knn).loc[ordem]
+    te = res.set_index("modelo").loc[ordem]
+    # coluna, prefixo do intervalo em teste.csv, titulo, nome curto, escala, acaso
+    paineis = [("acuracia_balanceada", "", "acurácia balanceada (%)", "acurácia balanceada",
+                100, 50),
+               ("sensibilidade", "sensibilidade_", "sensibilidade: fim de vida detectado (%)",
+                "sensibilidade", 100, None),
+               ("especificidade", "especificidade_", "especificidade: saudável reconhecida (%)",
+                "especificidade", 100, None),
+               ("precisao", "precisao_", "precisão: alarmes que eram fim de vida (%)",
+                "precisão", 100, None),
+               ("f1_fim_de_vida", "f1_", "F1 do fim de vida", "F1", 1, None),
+               ("auc", "auc_", "AUC", "AUC", 1, 0.5)]
+    n = len(ordem)
+    fig, axes = plt.subplots(2, 3, figsize=(13, 1.1 * n + 4.4), sharey=True)
+    ys = np.arange(n)[::-1]
+    for ax, (col, pre, titulo, _c, escala, acaso) in zip(axes.flat, paineis):
+        # Teste e validacao em alturas um pouco diferentes: quando os dois
+        # coincidem, o circulo cobriria o losango.
+        ax.hlines(ys - 0.1, escala * te[f"{pre}ic95_inferior"],
+                  escala * te[f"{pre}ic95_superior"], color=PAL[0], linewidth=2, zorder=2)
+        ax.scatter(escala * te[col], ys - 0.1, s=60, marker="D", color=PAL[0],
+                   edgecolors=SURF, linewidths=1.3, zorder=3, clip_on=False)
+        ax.scatter(escala * val[col], ys + 0.14, s=52, marker="o", facecolors=SURF,
+                   edgecolors=INK2, linewidths=1.5, zorder=3, clip_on=False)
+        if acaso is not None:
+            ax.axvline(acaso, color=INK2, linewidth=1, linestyle=":", zorder=0)
+            ax.text(acaso + 0.012 * escala, -0.62, "acaso", fontsize=8.5, color=INK2,
+                    va="bottom", ha="left")
+        ax.set_xlim(0, escala)
+        ax.xaxis.set_major_locator(FixedLocator([escala * v for v in (0, 0.25, 0.5, 0.75, 1)]))
+        if escala == 1:
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(lambda v, _: virg(v, 2).rstrip("0").rstrip(",")))
+        ax.set_title(titulo, fontsize=10, color=INK, loc="left")
+        ax.set_ylim(-0.7, n - 0.3)
+        ax.grid(axis="y", visible=False)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+    for ax in axes[:, 0]:
+        ax.set_yticks(ys, [ROTULO_MODELO.get(m, m) for m in ordem])
+        for tk in ax.get_yticklabels():
+            if tk.get_text() == nome_knn:
+                tk.set_fontweight("bold")
+                tk.set_color(INK)
+    alcas = [Line2D([], [], color=PAL[0], marker="D", markersize=7, markeredgecolor=SURF,
+                    linewidth=2, label="teste: 8 células, com IC 95% por reamostragem de células"),
+             Line2D([], [], color=INK2, marker="o", markersize=7, markerfacecolor=SURF,
+                    markeredgewidth=1.5, linestyle="",
+                    label="validação: 25 células de treino, uma de fora por vez")]
+    fig.legend(handles=alcas, loc="lower center", ncol=2, fontsize=9.5,
+               bbox_to_anchor=(0.5, -0.01))
+    lider = {}
+    for col, _p, _t, nome_curto, _e, _a in paineis:
+        lider.setdefault(te[col].idxmax(), []).append(nome_curto)
+    sub = ("Atributos relativos ao início de vida. O losango é o teste nas 8 células nunca vistas, "
+           "com o intervalo de 95% de reamostrar células inteiras; o círculo vazado é a validação "
+           "nas 25 células de treino, uma de fora por vez, com os escores das 25 rodadas juntados "
+           "para a AUC. Lideram no teste: "
+           + "; ".join(f"{ROTULO_MODELO.get(m, m)} em {lista(ms)}" for m, ms in lider.items())
+           + ".")
+    titulo_figura(plt, fig, "Todas as métricas, algoritmo por algoritmo", sub)
+    fig.subplots_adjust(bottom=0.11)
+    salvar(plt, fig, "04_metricas_por_algoritmo.png")
+
+
+def fig_erro_celulas(mods, plt, por, res, ordem):
+    """A fracao de erro de cada algoritmo em cada celula de teste, e nas 8 juntas."""
+    np = mods["numpy"]
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("erro", SEQ_ERRO)
+    nome_knn = ordem[0]
+    t = por.set_index(["modelo", "battery_id", "test_condition"])
+    base = por[por.modelo == nome_knn].reset_index(drop=True)
+    tot = res.set_index("modelo")
+    # (fracao de erro, alarmes falsos, fins de vida nao detectados) por par e modelo
+    pares = [[(1 - t.loc[(m, r.battery_id, r.test_condition), "acuracia"],
+               int(t.loc[(m, r.battery_id, r.test_condition), "alarmes_falsos"]),
+               int(t.loc[(m, r.battery_id, r.test_condition), "nao_detectados"]))
+              for m in ordem] for r in base.itertuples()]
+    total = [(1 - tot.loc[m, "acuracia"], int(tot.loc[m, "fp"]), int(tot.loc[m, "fn"]))
+             for m in ordem]
+    n_lin, n_col = len(pares), len(ordem)
+    # O conjunto das 8 celulas fica embaixo, separado dos pares por uma faixa vazia.
+    folga = 0.45
+    bordas_y = list(range(n_lin + 1)) + [n_lin + folga, n_lin + folga + 1]
+    erro = np.array([[e for e, _a, _n in lin] for lin in pares]
+                    + [[np.nan] * n_col] + [[e for e, _a, _n in total]])
+    vmax = max(0.5, float(np.ceil(10 * np.nanmax(erro)) / 10))
+    fig, ax = plt.subplots(figsize=(1.95 * n_col + 3.4, 0.56 * (n_lin + 1) + 2.9))
+    ax.pcolormesh(np.arange(n_col + 1), bordas_y, np.ma.masked_invalid(erro), cmap=cmap,
+                  vmin=0, vmax=vmax, edgecolors=SURF, linewidth=2.5)
+    centros = [i + 0.5 for i in range(n_lin)] + [n_lin + folga + 0.5]
+    for yc, lin in zip(centros, pares + [total]):
+        for j, (e, af, nd) in enumerate(lin):
+            # Sem erro, o zero fica apagado: o olho vai para onde ha erro.
+            if not (af or nd):
+                ax.text(j + 0.5, yc, "0%", ha="center", va="center", fontsize=10, color=INK2)
+                continue
+            tinta = _tinta(cmap(e / vmax))
+            ax.text(j + 0.5, yc - 0.12, f"{virg(100 * e, 0)}%", ha="center", va="center",
+                    fontsize=10.5, color=tinta, fontweight="bold")
+            ax.text(j + 0.5, yc + 0.24, f"{af} AF · {nd} ND", ha="center", va="center",
+                    fontsize=8, color=tinta)
+    ax.set_xlim(0, n_col)
+    ax.set_ylim(bordas_y[-1], 0)
+    ax.xaxis.tick_top()
+    ax.set_xticks(np.arange(n_col) + 0.5, [ROTULO_MODELO.get(m, m) for m in ordem], fontsize=10)
+    for tk in ax.get_xticklabels():
+        if tk.get_text() == nome_knn:
+            tk.set_fontweight("bold")
+            tk.set_color(INK)
+    rotulos = [f"{r.battery_id} · {condicao(r.test_condition)}\n"
+               f"{r.fim_de_vida_real} de {r.descargas} em fim de vida" for r in base.itertuples()]
+    rotulos.append(f"as 8 células\n{int(base.fim_de_vida_real.sum())} de "
+                   f"{int(base.descargas.sum())} em fim de vida")
+    ax.set_yticks(centros, rotulos, fontsize=9)
+    ax.tick_params(length=0)
+    ax.grid(False)
+    for lado in ax.spines.values():
+        lado.set_visible(False)
+    media = erro[:n_lin].mean(axis=1)
+    piores = np.argsort(media)[::-1][:3]
+    sub = ("Cada linha é uma célula de teste numa condição de ensaio, e cada coluna um algoritmo "
+           "ajustado nas 25 células de treino, com os atributos relativos. A cor e o número são a "
+           "fração das descargas do par classificadas errado; embaixo, quantas viraram alarme falso "
+           "(AF, saudável prevista como fim de vida) e quantas são fim de vida não detectado (ND). "
+           "Na média dos algoritmos, os pares com mais erro são "
+           + lista([f"{base.battery_id[i]} a {condicao(base.test_condition[i])} "
+                    f"({virg(100 * media[i], 0)}%)" for i in piores]) + ".")
+    titulo_figura(plt, fig, "Onde cada algoritmo erra", sub)
+    salvar(plt, fig, "06_erro_por_celula.png")
 
 
 def main():
@@ -1110,7 +1308,7 @@ def main():
     a = ap.parse_args()
 
     mods = checar()
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
     p("Classificacao de fim de vida com kNN")
@@ -1133,7 +1331,7 @@ def main():
     p("")
     p("2. protocolo, atributos e algoritmo (so treino):")
     refs = {} if a.sem_referencias else referencias()
-    comp, piv, vaz, por_cel, nome_knn = etapa_comparacao(mods, tr, conj, k_conj, refs)
+    comp, piv, por_cel, nome_knn = etapa_comparacao(mods, tr, conj, k_conj, refs)
 
     p("")
     p("3. teste: 8 celulas, avaliadas uma vez:")
@@ -1149,27 +1347,32 @@ def main():
         p("4. variante pulada: falta o agrupamento. Rode antes: python src/curvas.py "
           "e python src/grupos.py")
 
-    arquivos = {"escolha_de_k.csv": tab, "comparacao.csv": comp, "vazamento.csv": vaz,
+    arquivos = {"escolha_de_k.csv": tab, "comparacao.csv": comp,
                 "validacao_por_celula.csv": por_cel, "teste.csv": res,
                 "teste_por_celula.csv": por, "predicoes_teste.csv": prev}
     if variante:
         arquivos["variante_mesmo_grupo.csv"] = variante[0]
     p("")
     for nome, tabela in arquivos.items():
-        tabela.round(4).to_csv(SAIDA / nome, index=nome in ("escolha_de_k.csv",
-                                                            "variante_mesmo_grupo.csv"))
-        p(f"  {(SAIDA / nome).relative_to(RAIZ)}")
+        tabela.round(4).to_csv(TABELAS / nome, index=nome in ("escolha_de_k.csv",
+                                                              "variante_mesmo_grupo.csv"))
+        p(f"  {(TABELAS / nome).relative_to(RAIZ)}")
 
     if not a.sem_graficos:
         p("")
         p("graficos:")
         plt = estilo(mods)
+        # Na ordem do artigo: validacao, teste de todos os algoritmos, o kNN em
+        # detalhe e a variante pos-hoc. Sem referencias, os graficos por
+        # algoritmo saem so com o kNN.
+        ordem = ordem_modelos(piv, nome_knn)
         fig_escolha_k(mods, plt, tab, k, a.tolerancia)
         fig_hierarquia(mods, plt, piv, nome_knn)
-        fig_teste(mods, plt, res, piv, nome_knn)
-        fig_confusao(mods, plt, res.iloc[0].to_dict(), k)
-        fig_celulas(mods, plt, prev, k)
+        fig_matrizes(mods, plt, comp, res, ordem)
+        fig_metricas(mods, plt, comp, res, ordem)
         fig_roc(mods, plt, y_te, escores, res)
+        fig_erro_celulas(mods, plt, por, res, ordem)
+        fig_celulas(mods, plt, prev, k)
         if variante:
             fig_variante(mods, plt, variante[0], variante[2])
     p("")

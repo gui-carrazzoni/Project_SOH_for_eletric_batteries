@@ -9,8 +9,8 @@ Normalizacao: divisao por bateria, referencia de inicio de vida e escalonamento.
     python normalizar.py --so-relativas       # descarta as colunas brutas
     python normalizar.py --so-brutas          # nao calcula as relativas
 
-Le saida_nasa/preprocessado/dados_modelagem.csv e escreve em
-saida_nasa/normalizado/.
+Le saida_nasa/preprocessado/tabelas/dados_modelagem.csv e escreve em
+saida_nasa/normalizado/: as tabelas em tabelas/, o grafico em figuras/.
 
 Sao tres coisas distintas que costumam receber o mesmo nome:
 
@@ -61,8 +61,9 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "preprocessado" / "dados_modelagem.csv"
+ENTRADA = RAIZ / "saida_nasa" / "preprocessado" / "tabelas" / "dados_modelagem.csv"
 SAIDA = RAIZ / "saida_nasa" / "normalizado"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -235,7 +236,8 @@ def ganho(mods, plt, bruto, df, colunas, nome):
              "ciclos de cada celula.", fontsize=10.5, color=INK2, ha="left", va="top")
     fig.subplots_adjust(top=0.80)
     fig.tight_layout(rect=[0, 0, 1, 0.86])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    FIGURAS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
     return g
@@ -256,7 +258,7 @@ def main():
 
     mods = checar()
     np, pd = mods["numpy"], mods["pandas"]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     bruto = pd.read_csv(ENTRADA)
     numericas = [c for c in bruto.columns
                  if c not in CHAVES + [ALVO] and bruto[c].dtype.kind in "if"]
@@ -279,7 +281,7 @@ def main():
     else:
         com_ref = [c for c in numericas if c not in SEM_REFERENCIA]
         df, ref = referenciar(mods, df, com_ref, args.ciclos_referencia)
-        ref.to_csv(SAIDA / "referencias_por_celula.csv", index=False)
+        ref.to_csv(TABELAS / "referencias_por_celula.csv", index=False)
         p(f"  mediana dos {args.ciclos_referencia} primeiros ciclos de cada "
           f"bateria x condicao, em {len(com_ref)} colunas")
         p("  referencias_por_celula.csv")
@@ -292,14 +294,14 @@ def main():
 
     p("3. escalonamento z-score, ajustado so no treino:")
     df, par = escalonar(mods, df, escalaveis, com_ref)
-    par.round(6).to_csv(SAIDA / "parametros_escala.csv", index=False)
+    par.round(6).to_csv(TABELAS / "parametros_escala.csv", index=False)
     p(f"  {len(escalaveis)} colunas escalonadas")
     p(f"  parametros_escala.csv  (treino completo + {args.folds} folds)")
 
     ordem = ([c for c in CHAVES if c in df.columns] + ["split", "fold"]
              + sorted(escalaveis) + [ALVO])
     df = df[ordem]
-    df.to_csv(SAIDA / "dados_normalizados.csv", index=False)
+    df.to_csv(TABELAS / "dados_normalizados.csv", index=False)
     p(f"  dados_normalizados.csv  ({len(df)} x {len(df.columns)})")
 
     if not args.sem_graficos and com_ref:

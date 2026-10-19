@@ -13,6 +13,8 @@ Escreve nas duas arvores de esquema de grupo:
     saida_nasa/cluster/grupo_corrente_temperatura/modelos_area/
     saida_nasa/cluster/grupo_corrente_temperatura_corte/modelos_area/
 
+uma pasta por area, com as tabelas em tabelas/ e os graficos em figuras/.
+
 **As tres areas.** `carga_Ah_comum` (integral da corrente, em Ah), `tensao_Vs_comum`
 (integral da tensao, em V.s) e `energia_Wh_comum` (integral da potencia, em Wh).
 Todas na janela comum ate 2.7 V — a unica base que se compara entre celulas de
@@ -68,7 +70,7 @@ from pathlib import Path
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
 RAIZ = Path(__file__).resolve().parent.parent
-ENTRADA = RAIZ / "saida_nasa" / "curvas" / "features_curvas.csv"
+ENTRADA = RAIZ / "saida_nasa" / "curvas" / "tabelas" / "features_curvas.csv"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -299,8 +301,9 @@ def titulo_figura(plt, fig, texto, sub):
     fig.tight_layout(rect=[0, 0, 1, topo - len(linhas) * alt - 0.015])
 
 
-def desenhar(mods, plt, aj, venc, saida, rotulo, area_col, unidade):
+def desenhar(mods, plt, aj, venc, figuras, rotulo, area_col, unidade):
     np, pd = mods["numpy"], mods["pandas"]
+    figuras.mkdir(parents=True, exist_ok=True)
 
     # 01 — R2 por familia
     fig, ax = plt.subplots(figsize=(7.5, 4.6))
@@ -321,7 +324,7 @@ def desenhar(mods, plt, aj, venc, saida, rotulo, area_col, unidade):
                   f"Uma observacao por serie (celula dentro de grupo), para {area_col} "
                   f"em {unidade}. R2 alto e necessario mas nao suficiente: quem decide e "
                   f"o AIC, que desconta o numero de parametros.")
-    fig.savefig(saida / "01_r2_por_familia.png", bbox_inches="tight")
+    fig.savefig(figuras / "01_r2_por_familia.png", bbox_inches="tight")
     plt.close(fig)
     p(f"      01_r2_por_familia.png")
 
@@ -342,7 +345,7 @@ def desenhar(mods, plt, aj, venc, saida, rotulo, area_col, unidade):
                   "Vencedor por menor AIC em cada celula. Se um grupo e coerente, suas "
                   "celulas tendem a escolher a mesma familia; barras misturadas sugerem "
                   "que o grupo reune regimes de degradacao diferentes.")
-    fig.savefig(saida / "02_modelo_vencedor.png", bbox_inches="tight")
+    fig.savefig(figuras / "02_modelo_vencedor.png", bbox_inches="tight")
     plt.close(fig)
     p(f"      02_modelo_vencedor.png")
 
@@ -351,7 +354,8 @@ def rodar(mods, d, rotulos, nome, area_chave, graficos):
     pd = mods["pandas"]
     col, unidade, _desc = AREAS[area_chave]
     saida = RAIZ / "saida_nasa" / "cluster" / nome / "modelos_area" / area_chave
-    saida.mkdir(parents=True, exist_ok=True)
+    tabelas = saida / "tabelas"
+    tabelas.mkdir(parents=True, exist_ok=True)
 
     aj = rodar_area(mods, d, rotulos, col, nome)
     if aj.empty:
@@ -360,17 +364,17 @@ def rodar(mods, d, rotulos, nome, area_chave, graficos):
     venc = vencedores(mods, aj)
     relatar(mods, aj, venc, f"{nome}/{area_chave}")
 
-    aj.to_csv(saida / "ajustes.csv", index=False)
-    venc.to_csv(saida / "vencedores.csv", index=False)
+    aj.to_csv(tabelas / "ajustes.csv", index=False)
+    venc.to_csv(tabelas / "vencedores.csv", index=False)
     venc.groupby("grupo").agg(
         series=("modelo", "size"),
         modelo_mais_comum=("modelo", lambda s: s.mode().iat[0]),
         r2_mediano=("r2", "median"),
         rmse_mediano=("rmse", "median"),
-    ).to_csv(saida / "resumo_por_grupo.csv")
+    ).to_csv(tabelas / "resumo_por_grupo.csv")
 
     if graficos:
-        desenhar(mods, estilo(mods), aj, venc, saida, f"{nome}/{area_chave}",
+        desenhar(mods, estilo(mods), aj, venc, saida / "figuras", f"{nome}/{area_chave}",
                  col, unidade)
 
 
@@ -398,7 +402,7 @@ def main():
 
         cs = correlacao_soh(mods, d, rot)
         if not cs.empty:
-            alvo = RAIZ / "saida_nasa" / "cluster" / nome / "modelos_area"
+            alvo = RAIZ / "saida_nasa" / "cluster" / nome / "modelos_area" / "tabelas"
             alvo.mkdir(parents=True, exist_ok=True)
             cs.to_csv(alvo / "correlacao_com_soh.csv", index=False)
             p("")

@@ -7,7 +7,7 @@ Tabela de modelagem no esquema da Tabela 2 do artigo, e correlacao contra SOH.
     python correlacao_soh.py --sem-graficos # so as tabelas
     python correlacao_soh.py --remontar     # ignora o cache e rele as 2.794 curvas
 
-Escreve em saida_nasa/correlacao/.
+Escreve em saida_nasa/correlacao/: as tabelas em tabelas/, os graficos em figuras/.
 
 O esquema e o dicionario de dados do artigo, uma coluna por variavel, sem
 acrescimo. O que este script resolve para chegar la:
@@ -47,6 +47,9 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 DADOS = RAIZ / "cleaned_nasa_dataset"
 SAIDA = RAIZ / "saida_nasa" / "correlacao"
+FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
+# As metricas de cada descarga, de graficos_nasa.py.
+DESCARGAS = RAIZ / "saida_nasa" / "geral" / "tabelas" / "metricas_descargas.csv"
 
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -144,8 +147,8 @@ def checar():
         p("ERRO: faltam dependencias: " + ", ".join(faltando))
         p("    python -m pip install -r requirements.txt")
         sys.exit(1)
-    if not (RAIZ / "saida_nasa" / "metricas_descargas.csv").exists():
-        p("ERRO: saida_nasa/metricas_descargas.csv nao existe.")
+    if not DESCARGAS.exists():
+        p(f"ERRO: {DESCARGAS.relative_to(RAIZ)} nao existe.")
         p("    Rode antes: python graficos_nasa.py")
         sys.exit(1)
     if not DADOS.exists():
@@ -223,12 +226,12 @@ def impedancia_por_ensaio(mods):
 def montar(mods, remontar=False):
     """Tabela de modelagem. Cacheada: ler 2.794 curvas leva minutos."""
     np, pd = mods["numpy"], mods["pandas"]
-    cache = SAIDA / "tabela_modelagem.csv"
+    cache = TABELAS / "tabela_modelagem.csv"
     if cache.exists() and not remontar:
         p(f"  cache: {cache.relative_to(RAIZ)}")
         return pd.read_csv(cache)
 
-    base = pd.read_csv(RAIZ / "saida_nasa" / "metricas_descargas.csv")
+    base = pd.read_csv(DESCARGAS)
     p(f"  agregando {len(base)} descargas...")
     linhas = []
     for n, arquivo in enumerate(base.filename, 1):
@@ -282,7 +285,7 @@ def montar(mods, remontar=False):
 
     ordem = [c for c in DICIONARIO if c in df.columns]
     df = df[ordem]
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    TABELAS.mkdir(parents=True, exist_ok=True)
     df.to_csv(cache, index=False)
     p(f"  tabela_modelagem.csv  ({len(df)} x {len(df.columns)})")
     return df
@@ -353,7 +356,7 @@ def escrever_dicionario(mods, df, rank):
     dic = pd.DataFrame(linhas).set_index("variavel").join(
         rank[["within_cell_correlation", "median_per_cell_correlation",
               "same_sign_fraction", "sample_count"]])
-    dic.to_csv(SAIDA / "dicionario_tabela2.csv")
+    dic.to_csv(TABELAS / "dicionario_tabela2.csv")
     p("  dicionario_tabela2.csv")
 
 
@@ -406,7 +409,7 @@ def mapa(mods, plt, m, nome, texto, sub):
     barra.outline.set_visible(False)
     titulo_figura(fig, texto, sub)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -438,7 +441,7 @@ def barras(plt, rank, nome):
                   "Linha cinza: faixa p10-p90 celula a celula. capacity e time ficam "
                   "de fora por serem vazamento.")
     fig.tight_layout(rect=[0, 0, 1, 0.90])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -509,7 +512,7 @@ def agrupada_vs_intra(mods, plt, bom, num, nome, col="voltage_load"):
                   "nuvem com a media de cada bateria x condicao subtraida. Nada foi "
                   "filtrado entre um painel e outro.")
     fig.tight_layout(rect=[0, 0, 1, 0.89])
-    fig.savefig(SAIDA / nome, bbox_inches="tight")
+    fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
 
@@ -522,7 +525,8 @@ def main():
     args = ap.parse_args()
 
     mods = checar()
-    SAIDA.mkdir(parents=True, exist_ok=True)
+    for pasta in (FIGURAS, TABELAS):
+        pasta.mkdir(parents=True, exist_ok=True)
     p("tabela de modelagem:")
     df = montar(mods, args.remontar)
     bom, num = preparar(mods, df)
@@ -531,9 +535,9 @@ def main():
     p("correlacao:")
     matrizes, rank = correlacionar(mods, bom, num)
     for nome, m in matrizes.items():
-        m.round(4).to_csv(SAIDA / f"matriz_{nome}.csv")
+        m.round(4).to_csv(TABELAS / f"matriz_{nome}.csv")
         p(f"  matriz_{nome}.csv")
-    rank.round(4).to_csv(SAIDA / "ranking_vs_soh.csv")
+    rank.round(4).to_csv(TABELAS / "ranking_vs_soh.csv")
     p("  ranking_vs_soh.csv")
     escrever_dicionario(mods, df, rank)
 
