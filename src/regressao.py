@@ -104,22 +104,26 @@ dividido pela perda por ciclo. Onde a perda e de 0,12 p.p. por ciclo, 5 p.p. de
 SOH sao 40 ciclos.
 
 **Familias da literatura como referencia.** Regressao linear, SVR, Random Forest
-e Gradient Boosting, com os hiperparametros padrao do scikit-learn, no mesmo
-protocolo, com o mesmo preparo e a mesma conversao. Nao decidem nada: dizem
-onde o GAM fica.
+e processo gaussiano, uma de cada familia, com os hiperparametros padrao do
+scikit-learn — menos no processo gaussiano, cujo padrao preve SOH perto de 0
+longe do treino (referencias() explica) —, no mesmo protocolo, com o mesmo
+preparo e a mesma conversao. Nao decidem nada: dizem onde o GAM fica.
 
 **Os resultados de cada algoritmo.** As quatro referencias saem com o mesmo
 detalhe do GAM: todas as metricas com o intervalo por celulas
 (03_metricas_por_algoritmo.png), SOH estimado contra medido, com as quatro
 casas do limiar de 80% (04_previsto_vs_real_por_algoritmo.png), o erro em cada
 par de teste (05_erro_por_par.png) e o RUL nos pares que chegam a 80%
-(09_rul_teste_por_algoritmo.png). Nada disso escolhe nada; e o que permite
-discutir os cinco lado a lado, e nao so o GAM.
+(09_rul_teste_por_algoritmo.png). Em teste_por_modelo/,
+<algoritmo>_por_celula.png e a 06 de cada algoritmo, com o eixo de cada par
+igual em todas. Nada disso escolhe nada; e o que permite discutir os cinco lado
+a lado, e nao so o GAM.
 
 **Onde fica cada coisa.** As tabelas vao para saida_nasa/regressao/tabelas/ e
 os graficos para saida_nasa/regressao/figuras/, numerados na ordem do artigo:
 validacao (01 e 02), teste de todos os algoritmos (03 a 05), o GAM em detalhe
-(06 e 07) e o RUL (08 e 09).
+(06 e 07) e o RUL (08 e 09). As imagens por algoritmo ficam em
+figuras/teste_por_modelo/.
 
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
@@ -152,6 +156,8 @@ PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
        "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 SURF, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e3e2de"
 MUTED = "#898781"          # o SOH medido: fundo, para a estimativa aparecer
+FAIXA = "#cfe0f5"          # intervalo de confianca: o azul do teste, lavado
+RECUO_SETA = 6.5           # pt: a seta para antes do centro do marcador, sem cobri-lo
 
 ALVO = "SOH"
 FIM_DE_VIDA = 80.0         # limiar de 80% do artigo, em SOH (%)
@@ -173,11 +179,11 @@ COR_CONJUNTO = {"relativas": (PAL[0], "D"), "brutas": (PAL[7], "o"),
 # acento volta so nos graficos, que vao para o artigo.
 ROTULO_MODELO = {"Regressao linear": "Regressão linear"}
 SLUG = {"GAM": "gam", "Regressao linear": "regressao_linear", "SVR (RBF)": "svr",
-        "Random Forest": "random_forest", "Gradient Boosting": "gradient_boosting",
+        "Random Forest": "random_forest", "Processo gaussiano": "processo_gaussiano",
         "oraculo": "oraculo"}
 # Apelido no terminal, onde a tabela por par tem uma coluna por modelo.
 CURTO = {"GAM": "GAM", "Regressao linear": "linear", "SVR (RBF)": "SVR",
-         "Random Forest": "RF", "Gradient Boosting": "GB"}
+         "Random Forest": "RF", "Processo gaussiano": "GPR"}
 # Rampa sequencial do erro, a mesma de classificacao.py: o laranja que marca os
 # erros, do quase-nada ao escuro, com a luminosidade (OKLCH) caindo a cada passo.
 SEQ_ERRO = ["#f0efec", "#f7d9c9", "#f4b394", "#ef8c5f", "#eb6834", "#bf4a1b", "#86300c"]
@@ -361,8 +367,19 @@ def gam(lam, colunas):
 
 
 def referencias():
-    """As familias dos trabalhos relacionados, com os hiperparametros padrao."""
-    from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+    """As familias dos trabalhos relacionados, uma de cada, com os hiperparametros padrao.
+
+    O processo gaussiano e a unica excecao. O padrao do scikit-learn tem media
+    zero a priori, nenhum ruido e o nucleo fixo, e longe do treino preve SOH
+    perto de 0 (RMSE de 86 p.p. na validacao). Com normalize_y a media a priori
+    e a do treino, o WhiteKernel absorve o ruido das medidas, e o nucleo sai da
+    verossimilhanca marginal, so com o treino de cada rodada. A rede neural, a
+    outra familia que faltava, extrapola sem freio: deixando B0041 de fora, a
+    unica celula avaliavel a 4 A / 4 C, a MLP erra centenas de p.p. nela.
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
     from sklearn.linear_model import LinearRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.svm import SVR
@@ -371,8 +388,8 @@ def referencias():
         "SVR (RBF)": make_pipeline(preparo(), SVR()),
         "Random Forest": make_pipeline(
             preparo(), RandomForestRegressor(random_state=SEMENTE, n_jobs=-1)),
-        "Gradient Boosting": make_pipeline(
-            preparo(), HistGradientBoostingRegressor(random_state=SEMENTE)),
+        "Processo gaussiano": make_pipeline(preparo(), GaussianProcessRegressor(
+            kernel=ConstantKernel() * RBF() + WhiteKernel(), normalize_y=True)),
     }
 
 
@@ -1058,10 +1075,27 @@ def titulo_figura(plt, fig, texto, sub):
 
 
 def salvar(plt, fig, nome):
-    FIGURAS.mkdir(parents=True, exist_ok=True)
+    (FIGURAS / nome).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
+
+
+def _setas(fig, setas):
+    """Setas horizontais (ax, x0, x1, y), desenhadas depois do layout.
+
+    So com o layout pronto se sabe quantos pontos ha entre os dois marcadores.
+    Onde a ponta nao cabe, os marcadores quase se tocam e a seta fica de fora:
+    a diferenca e pequena demais para a direcao importar.
+    """
+    for ax, x0, x1, y in setas:
+        (a, _), (b, _) = ax.transData.transform([(x0, y), (x1, y)])
+        if abs(b - a) * 72 / fig.dpi < 2 * RECUO_SETA + 5:
+            continue
+        ax.annotate("", xy=(x1, y), xytext=(x0, y), zorder=2, annotation_clip=False,
+                    arrowprops=dict(arrowstyle="-|>", color=INK2, linewidth=1.4,
+                                    mutation_scale=10, shrinkA=RECUO_SETA,
+                                    shrinkB=RECUO_SETA))
 
 
 def fig_escolha_lambda(mods, plt, tab, lam, tolerancia):
@@ -1107,88 +1141,113 @@ def fig_escolha_lambda(mods, plt, tab, lam, tolerancia):
 
 def fig_hierarquia(mods, plt, piv, nulo, lam):
     np = mods["numpy"]
+    from matplotlib.lines import Line2D
     refs = [m for m in piv.sort_values("relativas").index if m != "GAM"]
     piv = piv.loc[["GAM"] + refs]
     n = len(piv)
-    cols = [c for c in CONJUNTOS if c in piv.columns]
-    todas = cols + ["aleatoria", "todos_os_pares"]
+    ys = np.arange(n)[::-1]
+    # Uma escolha por painel e uma seta por algoritmo: do que sai ao que entra,
+    # com o resto fixo, e a mudanca escrita sobre a seta. O losango cheio —
+    # atributos relativos, uma celula de fora, so pares avaliaveis no treino —
+    # e a ponta da seta dos atributos e o pe das outras duas. O conjunto
+    # completo fica na tabela: nao responde a nenhuma das perguntas.
+    marca = {"brutas": dict(marker="o", markersize=9, markerfacecolor=PAL[7],
+                            markeredgecolor=SURF, markeredgewidth=1.5),
+             "relativas": dict(marker="D", markersize=8.5, markerfacecolor=PAL[0],
+                               markeredgecolor=SURF, markeredgewidth=1.5),
+             "todos_os_pares": dict(marker="^", markersize=9.5, markerfacecolor=SURF,
+                                    markeredgecolor=INK2, markeredgewidth=1.6),
+             "aleatoria": dict(marker="D", markersize=8.5, markerfacecolor=SURF,
+                               markeredgecolor=PAL[0], markeredgewidth=1.8)}
+    paineis = []
+    if "brutas" in piv.columns:
+        paineis.append(("Atributos: brutos → relativos",
+                        ("brutas", "atributos brutos"), ("relativas", "atributos relativos")))
+    paineis += [("Rótulos: só avaliáveis → com artificiais",
+                 ("relativas", "só pares avaliáveis"),
+                 ("todos_os_pares", "com os 7 de SOH artificial")),
+                ("Protocolo: uma célula de fora → aleatória",
+                 ("relativas", "uma célula de fora"), ("aleatoria", "partição aleatória (vazada)"))]
     # Valores muito altos (a regressao linear que extrapola) iriam esmagar o
     # resto: o eixo para num teto e eles ganham seta e numero.
     teto = 1.6 * nulo
     corta = lambda v: np.minimum(np.asarray(v, dtype=float), teto)
-    fig, ax = plt.subplots(figsize=(10, 0.66 * n + 3.4))
-    ys = np.arange(n)[::-1]
-    for y, (_, r) in zip(ys, piv.iterrows()):
-        v = r[todas].astype(float)
-        ax.plot(corta([v.min(), v.max()]), [y, y], color=GRID, linewidth=3,
-                solid_capstyle="round", zorder=1)
-    # Os conjuntos saem um pouco da linha: quando dois empatam, um marcador
-    # cobriria o outro. O relativo e o vazado ficam na linha.
-    desvio = {"brutas": 0.16, "todas": -0.16, "relativas": 0.0}
-    for c in [c for c in ("brutas", "todas", "relativas") if c in cols]:
-        cor, mk = COR_CONJUNTO[c]
-        ax.scatter(corta(piv[c]), ys + desvio[c], s=80, color=cor, marker=mk,
-                   edgecolors=SURF, linewidths=1.5, zorder=3, label=NOME_CONJUNTO[c])
-    ax.scatter(corta(piv.aleatoria), ys, s=80, marker="D", facecolors=SURF,
-               edgecolors=PAL[0], linewidths=1.8, zorder=3,
-               label="relativos, partição aleatória (vazada)")
-    ax.scatter(corta(piv.todos_os_pares), ys - 0.16, s=85, marker="^", facecolors=SURF,
-               edgecolors=INK2, linewidths=1.6, zorder=3,
-               label="relativos, com os pares de SOH artificial no treino")
-    for y, (_, r) in zip(ys, piv.iterrows()):
-        for c, dy in [(c, desvio.get(c, 0.0)) for c in cols] + [("aleatoria", 0.0),
-                                                                ("todos_os_pares", -0.16)]:
-            if r[c] > teto:
-                ax.annotate(f"{virg(r[c], 0)} ▸", (teto, y + dy), xytext=(7, 0),
-                            textcoords="offset points", fontsize=8.5, color=INK2,
-                            va="center", ha="left")
-    ax.axvline(nulo, color=INK2, linewidth=1, linestyle=":", zorder=0)
-    ax.text(nulo, n - 0.45, " prever a média", fontsize=9, color=INK2, va="bottom", ha="left")
-    rotulos = [f"GAM (λ = {potencia(lam)})" if m == "GAM" else ROTULO_MODELO.get(m, m)
-               for m in piv.index]
-    ax.set_yticks(ys, rotulos)
-    for t in ax.get_yticklabels():
+    fig, axes = plt.subplots(1, len(paineis), figsize=(4.0 * len(paineis) + 1.9, 0.66 * n + 3.7),
+                             sharex=True, sharey=True, squeeze=False)
+    setas = []
+    for ax, (titulo, (de, rot_de), (para, rot_para)) in zip(axes[0], paineis):
+        for y, a, b, va, vb in zip(ys, corta(piv[de]), corta(piv[para]), piv[de], piv[para]):
+            setas.append((ax, a, b, y))
+            ax.text((a + b) / 2, y + 0.17, sinal(vb - va), fontsize=9, color=INK2,
+                    ha="center", va="bottom")
+            for v in (va, vb):
+                if v > teto:
+                    ax.annotate(f"{virg(v, 0)} ▸", (teto, y), xytext=(7, 0),
+                                textcoords="offset points", fontsize=8.5, color=INK2,
+                                va="center", ha="left")
+        for c in (de, para):
+            ax.plot(corta(piv[c]), ys, linestyle="", zorder=3, clip_on=False, **marca[c])
+        ax.axvline(nulo, color=INK2, linewidth=1, linestyle=":", zorder=0)
+        ax.text(nulo, -0.6, "prever a média ", fontsize=8.5, color=INK2, va="bottom", ha="right")
+        ax.set_title(titulo, loc="left", fontsize=11, color=INK, pad=24)
+        ax.legend(handles=[Line2D([], [], linestyle="", label=rot, **marca[c])
+                           for c, rot in ((de, rot_de), (para, rot_para))],
+                  fontsize=9, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=2,
+                  borderaxespad=0.2, handletextpad=0.2, columnspacing=1.4)
+        ax.set_xlabel("RMSE do SOH (p.p.), menor é melhor")
+        ax.grid(axis="y", visible=False)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+    usadas = [c for c in marca if c in piv.columns]
+    ax.set_xlim(0, max(nulo, min(teto, float(np.nanmax(piv[usadas].to_numpy(float))))) * 1.08)
+    ax.set_ylim(-0.7, n - 0.3)
+    axes[0, 0].set_yticks(ys, [rotulo_modelo(m, lam) for m in piv.index])
+    for t in axes[0, 0].get_yticklabels():
         if t.get_text().startswith("GAM"):
             t.set_fontweight("bold")
             t.set_color(INK)
-    ax.set_xlim(0, min(teto, float(np.nanmax(piv[todas].to_numpy(float))), ) * 1.1)
-    ax.set_ylim(-0.7, n - 0.1)
-    ax.set_xlabel("RMSE do SOH (p.p.), menor é melhor")
-    ax.grid(axis="y", visible=False)
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.legend(fontsize=9, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2,
-              borderaxespad=0.4)
-    sinal = lambda v: ("+" if v >= 0 else "") + virg(v)
-    faixa = lambda s: f"{sinal(s.min())} a {sinal(s.max())} p.p."
-    sub = ("RMSE na validação nas 20 células de treino. Pontos cheios: uma célula de fora por "
-           "vez; losango vazado: partição aleatória por descarga, que põe a mesma célula dos "
-           f"dois lados e muda o RMSE em {faixa(piv.aleatoria - piv.relativas)}; triângulo: os "
-           "7 pares de SOH artificial de volta ao treino, que mudam o RMSE em "
-           f"{faixa(piv.todos_os_pares - piv.relativas)}")
-    if "brutas" in cols:
-        sub += (f" Trocar atributos brutos por relativos muda o RMSE em "
-                f"{faixa(piv.relativas - piv.brutas)}")
-    sub += " Negativo: o RMSE cai."
+
+    # Espaco inseparavel antes de "p.p.": a quebra de linha nao separa o numero da unidade.
+    faixa = lambda s: f"de {sinal(s.min())} a {sinal(s.max())}\u00a0p.p."
+    sub = ("RMSE na validação nas 20 células de treino; menor é melhor. Cada seta troca uma escolha "
+           "e mantém o resto; o número sobre ela é quanto o RMSE muda, em p.p.")
+    if "brutas" in piv.columns:
+        sub += f" Atributos relativos no lugar dos brutos: {faixa(piv.relativas - piv.brutas)}"
+    sub += (f" Os 7 pares de SOH artificial de volta ao treino: "
+            f"{faixa(piv.todos_os_pares - piv.relativas)} Partição aleatória por descarga no lugar "
+            f"de deixar uma célula de fora: {faixa(piv.aleatoria - piv.relativas)}, um ganho que só "
+            "existe porque a mesma célula fica no treino e na validação.")
+    rel = piv.relativas.sort_values()
+    sub += (f" Entre os algoritmos, nos losangos cheios, o RMSE vai de {virg(rel.iloc[0])} "
+            f"({rotulo_modelo(rel.index[0], lam)}) a {virg(rel.iloc[-1])}\u00a0p.p. "
+            f"({rotulo_modelo(rel.index[-1], lam)}); prever a média dá {virg(nulo)}.")
     titulo_figura(plt, fig, "Protocolo, rótulos, atributos e algoritmo", sub)
+    _setas(fig, setas)
     salvar(plt, fig, "02_protocolo_rotulos_atributos_algoritmo.png")
 
 
-def fig_celulas(mods, plt, prev, por, lam):
+def _limite_soh(valores):
+    """O eixo de SOH de um par: os valores e o limiar, com folga, sem passar de 106%."""
+    folga = max(2.0, 0.08 * (max(valores) - min(valores)))
+    return min(valores) - folga, min(max(valores) + folga, 106)
+
+
+def _grade_celulas(plt, a, coluna, erro, limites, rotulo_est):
+    """Um painel por par de teste: o SOH medido em pontos e o estimado em linha.
+
+    `coluna` e a do SOH estimado em `a`; `erro` traz o RMSE e o vies de cada
+    par, e `limites` o eixo de SOH de cada um.
+    """
     from matplotlib.lines import Line2D
-    a = prev[prev.avaliavel]
     grupos = list(a.groupby(["battery_id", "test_condition"], sort=True))
-    erro = por[por.modelo == "GAM"].set_index(["battery_id", "test_condition"])
     ncol = 4
     nlin = -(-len(grupos) // ncol)
     fig, axes = plt.subplots(nlin, ncol, figsize=(13, 2.9 * nlin + 1.9), squeeze=False)
     for i, (ax, ((bat, cond), g)) in enumerate(zip(axes.flat, grupos)):
         ax.axhline(FIM_DE_VIDA, color=INK2, linestyle="--", linewidth=1.1, zorder=1)
         ax.scatter(g.ciclo, g[ALVO], s=12, color=MUTED, alpha=0.7, linewidths=0, zorder=2)
-        ax.plot(g.ciclo, g.soh_gam, color=PAL[0], linewidth=1.8, zorder=3)
-        v = list(g[ALVO]) + list(g.soh_gam) + [FIM_DE_VIDA]
-        folga = max(2.0, 0.08 * (max(v) - min(v)))
-        ax.set_ylim(min(v) - folga, min(max(v) + folga, 106))
+        ax.plot(g.ciclo, g[coluna], color=PAL[0], linewidth=1.8, zorder=3)
+        ax.set_ylim(*limites[(bat, cond)])
         e = erro.loc[(bat, cond)]
         ax.set_title(f"{bat} · {condicao(cond)}\nRMSE {virg(e.rmse)} p.p., viés "
                      f"{virg(e.vies)}", fontsize=9.5, color=INK, loc="left")
@@ -1199,7 +1258,7 @@ def fig_celulas(mods, plt, prev, por, lam):
             ax.set_xlabel("ciclo da célula", fontsize=9.5)
     alcas = [Line2D([], [], color=MUTED, marker="o", linestyle="", markersize=5,
                     label="SOH medido"),
-             Line2D([], [], color=PAL[0], linewidth=1.8, label="SOH estimado pelo GAM"),
+             Line2D([], [], color=PAL[0], linewidth=1.8, label=rotulo_est),
              Line2D([], [], color=INK2, linestyle="--", linewidth=1.1,
                     label=f"limiar de fim de vida ({FIM_DE_VIDA:.0f}%)")]
     sobra = list(axes.flat)[len(grupos):]
@@ -1209,11 +1268,42 @@ def fig_celulas(mods, plt, prev, por, lam):
         sobra[0].legend(handles=alcas, loc="center", fontsize=9.5)
     else:
         fig.legend(handles=alcas, loc="lower center", ncol=3, fontsize=9.5)
+    return fig
+
+
+def fig_celulas(mods, plt, prev, por, lam):
+    a = prev[prev.avaliavel]
+    erro = por[por.modelo == "GAM"].set_index(["battery_id", "test_condition"])
+    limites = {par: _limite_soh(list(g[ALVO]) + list(g.soh_gam) + [FIM_DE_VIDA])
+               for par, g in a.groupby(["battery_id", "test_condition"])}
+    fig = _grade_celulas(plt, a, "soh_gam", erro, limites, "SOH estimado pelo GAM")
     sub = (f"Cada painel é um par célula × condição de teste, com o GAM de λ = {potencia(lam)} "
            "ajustado nas células de treino. O viés é a média de estimado menos medido: "
            "positivo, o GAM vê a célula mais saudável do que ela está.")
     titulo_figura(plt, fig, "O GAM em cada célula de teste", sub)
     salvar(plt, fig, "06_teste_por_celula.png")
+
+
+def fig_celulas_por_modelo(mods, plt, prev, por, ordem, lam):
+    """A 06 para cada algoritmo, em teste_por_modelo/<algoritmo>_por_celula.png.
+
+    O eixo de SOH de cada par e o mesmo nas imagens de todos os algoritmos: sai
+    do medido e das estimativas de todos, para as imagens se compararem.
+    """
+    a = prev[prev.avaliavel]
+    colunas = [f"soh_{SLUG[m]}" for m in ordem]
+    limites = {par: _limite_soh(list(g[ALVO]) + list(g[colunas].to_numpy().ravel())
+                                + [FIM_DE_VIDA])
+               for par, g in a.groupby(["battery_id", "test_condition"])}
+    sub = ("Cada painel é um par célula × condição de teste, com o algoritmo ajustado nas 20 "
+           "células de treino, com os atributos relativos ao início de vida. O eixo de SOH de "
+           "cada par é o mesmo nas imagens de todos os algoritmos. O viés é a média de estimado "
+           "menos medido: positivo, o algoritmo vê a célula mais saudável do que ela está.")
+    for m, coluna in zip(ordem, colunas):
+        erro = por[por.modelo == m].set_index(["battery_id", "test_condition"])
+        fig = _grade_celulas(plt, a, coluna, erro, limites, "SOH estimado")
+        titulo_figura(plt, fig, f"{rotulo_modelo(m, lam)}: SOH em cada célula de teste", sub)
+        salvar(plt, fig, f"teste_por_modelo/{SLUG[m]}_por_celula.png")
 
 
 def fig_efeitos(mods, plt, curvas, resumo, rug):
@@ -1373,7 +1463,9 @@ def fig_previsto_real_todos(mods, plt, prev, res, ordem, lam):
                 ax.scatter(x[fora], np.full(fora.sum(), borda), marker=mk, **seta)
         nao_visto = int(((x < FIM_DE_VIDA) & (y >= FIM_DE_VIDA)).sum())
         falso = int(((x >= FIM_DE_VIDA) & (y < FIM_DE_VIDA)).sum())
-        ax.text(lo + 1.3, hi - 1.2, f"fim de vida não percebido\n{nao_visto} descargas",
+        # O texto do canto comeca depois das setas da borda esquerda, que podem
+        # cair na mesma altura.
+        ax.text(lo + 2.2, hi - 1.2, f"fim de vida não percebido\n{nao_visto} descargas",
                 fontsize=8.5, color=INK2, va="top", ha="left")
         ax.text(hi - 1.2, lo + 1.3, f"alarme falso\n{falso} descargas", fontsize=8.5,
                 color=INK2, va="bottom", ha="right")
@@ -1424,29 +1516,36 @@ def fig_previsto_real_todos(mods, plt, prev, res, ordem, lam):
 
 
 def fig_metricas(mods, plt, comp, res, nulo, ordem, lam):
-    """RMSE, MAE, R2 e vies de cada algoritmo: o teste com intervalo, ao lado da validacao."""
+    """RMSE, MAE, R2 e vies de cada algoritmo: da validacao ao teste, com o intervalo do teste."""
     np = mods["numpy"]
     from matplotlib.lines import Line2D
-    from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
     val = comp[(comp.atributos == "relativas") & (comp.validacao == "uma celula de fora")
                & (comp.rotulos_no_treino == "pares avaliaveis")].set_index("modelo").loc[ordem]
     te = res.set_index("modelo").loc[ordem]
-    paineis = [("rmse", "RMSE do SOH (p.p.), menor é melhor"),
-               ("mae", "MAE do SOH (p.p.), menor é melhor"),
-               ("r2", "R², maior é melhor"),
-               ("vies", "viés do SOH (p.p.), estimado − medido")]
+    # coluna, titulo, nome curto, sentido (1: maior e melhor, -1: menor e melhor,
+    # 0: o vies, em que o melhor e o zero)
+    paineis = [("rmse", "RMSE do SOH (p.p.), menor é melhor", "RMSE", -1),
+               ("mae", "MAE do SOH (p.p.), menor é melhor", "MAE", -1),
+               ("r2", "R², maior é melhor", "R²", 1),
+               ("vies", "viés do SOH (p.p.), estimado − medido", "viés", 0)]
+    valid = dict(marker="o", markersize=7.5, markerfacecolor=SURF, markeredgecolor=INK2,
+                 markeredgewidth=1.5)
+    teste = dict(marker="D", markersize=8, markerfacecolor=PAL[0], markeredgecolor=SURF,
+                 markeredgewidth=1.3)
     n = len(ordem)
-    fig, axes = plt.subplots(1, len(paineis), figsize=(13.5, 0.62 * n + 3.4), sharey=True)
+    fig, axes = plt.subplots(1, len(paineis), figsize=(13.5, 0.62 * n + 3.6), sharey=True)
     ys = np.arange(n)[::-1]
-    for ax, (col, titulo) in zip(axes, paineis):
+    setas = []
+    for ax, (col, titulo, _c, _s) in zip(axes, paineis):
         lo_ic, hi_ic = te[f"{col}_ic95_inferior"], te[f"{col}_ic95_superior"]
-        # Teste e validacao em alturas um pouco diferentes: quando os dois
-        # coincidem, o circulo cobriria o losango.
-        ax.hlines(ys - 0.1, lo_ic, hi_ic, color=PAL[0], linewidth=2, zorder=2)
-        ax.scatter(te[col], ys - 0.1, s=60, marker="D", color=PAL[0], edgecolors=SURF,
-                   linewidths=1.3, zorder=3)
-        ax.scatter(val[col], ys + 0.14, s=52, marker="o", facecolors=SURF, edgecolors=INK2,
-                   linewidths=1.5, zorder=3)
+        # Uma linha por algoritmo: a faixa e o intervalo do teste, e a seta vai
+        # da validacao ao teste. Quem cai, quem sobe, e quanto a faixa deixa
+        # afirmar, sem um marcador fora da linha do seu algoritmo.
+        ax.hlines(ys, lo_ic, hi_ic, color=FAIXA, linewidth=9, capstyle="butt", zorder=1)
+        ax.plot(val[col], ys, linestyle="", zorder=3, clip_on=False, **valid)
+        ax.plot(te[col], ys, linestyle="", zorder=4, clip_on=False, **teste)
+        setas += [(ax, v, t, y) for v, t, y in zip(val[col], te[col], ys)]
         valores = np.r_[lo_ic, hi_ic, val[col]].astype(float)
         if col == "vies":
             ax.axvline(0, color=INK2, linewidth=1, zorder=0)
@@ -1454,14 +1553,18 @@ def fig_metricas(mods, plt, comp, res, nulo, ordem, lam):
             lim = 1.15 * float(np.nanmax(np.abs(valores)))
             ax.set_xlim(-lim, lim)
         else:
-            ax.axvline(nulo[col], color=INK2, linewidth=1, linestyle=":", zorder=0)
-            ax.text(nulo[col], -0.62, " prever a média", fontsize=8.5, color=INK2,
-                    va="bottom", ha="left")
             valores = np.r_[valores, nulo[col]]
             if col == "r2":
                 ax.set_xlim(min(0.0, float(np.nanmin(valores))) - 0.05, 1.0)
             else:
                 ax.set_xlim(0, 1.1 * float(np.nanmax(valores)))
+            # O rotulo fica do lado de dentro da linha, sem invadir o painel vizinho.
+            dentro = "right" if nulo[col] > sum(ax.get_xlim()) / 2 else "left"
+            ax.axvline(nulo[col], color=INK2, linewidth=1, linestyle=":", zorder=0)
+            ax.text(nulo[col], -0.62, " prever a média ", fontsize=8.5, color=INK2,
+                    va="bottom", ha=dentro)
+        # Poucos ticks: o da borda direita encostaria no zero do painel vizinho.
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 5, 10]))
         ax.xaxis.set_major_formatter(
             FuncFormatter(lambda v, _: virg(v, 2).rstrip("0").rstrip(",")))
         ax.set_title(titulo, fontsize=10, color=INK, loc="left")
@@ -1474,23 +1577,45 @@ def fig_metricas(mods, plt, comp, res, nulo, ordem, lam):
         if tk.get_text().startswith("GAM"):
             tk.set_fontweight("bold")
             tk.set_color(INK)
-    alcas = [Line2D([], [], color=PAL[0], marker="D", markersize=7, markeredgecolor=SURF,
-                    linewidth=2, label="teste: 8 células, com IC 95% por reamostragem de células"),
-             Line2D([], [], color=INK2, marker="o", markersize=7, markerfacecolor=SURF,
-                    markeredgewidth=1.5, linestyle="",
-                    label="validação: 20 células de treino, uma de fora por vez")]
-    fig.legend(handles=alcas, loc="lower center", ncol=2, fontsize=9.5,
+    alcas = [Line2D([], [], linestyle="", label="validação: 20 células de treino, uma de fora por vez",
+                    **valid),
+             Line2D([], [], linestyle="", label="teste: 8 células nunca vistas", **teste),
+             Line2D([], [], color=FAIXA, linewidth=9, solid_capstyle="butt",
+                    label="IC 95% do teste, reamostrando células inteiras")]
+    fig.legend(handles=alcas, loc="lower center", ncol=3, fontsize=9.5,
                bbox_to_anchor=(0.5, -0.02))
     rot = lambda m: rotulo_modelo(m, lam)
-    sub = ("Atributos relativos ao início de vida. O losango é o teste nas 8 células nunca vistas, "
-           "com o intervalo de 95% de reamostrar células inteiras; o círculo vazado é a validação "
-           "nas 20 células de treino. A linha pontilhada é o modelo nulo no teste, que prevê para "
-           "toda descarga a média do SOH do treino. Viés positivo: o modelo vê a célula mais "
-           f"saudável do que ela está. No teste, menor RMSE: {rot(te.rmse.idxmin())}; menor MAE: "
-           f"{rot(te.mae.idxmin())}; o viés vai de {sinal(te.vies.min())} p.p., com "
-           f"{rot(te.vies.idxmin())}, a {sinal(te.vies.max())} p.p., com {rot(te.vies.idxmax())}.")
+    # Faixas que nao se cruzam: o unico caso em que o grafico, sozinho, separa
+    # dois algoritmos. A diferenca pareada de teste.csv e mais sensivel.
+    separadas = []
+    for col, _t, nome_curto, sentido in paineis:
+        if not sentido:
+            continue
+        lo, hi = sentido * te[f"{col}_ic95_inferior"], sentido * te[f"{col}_ic95_superior"]
+        lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
+        frente = [f"{rot(a)} à frente de {lista([rot(b) for b in ordem if lo[a] > hi[b]])}"
+                  for a in ordem if (lo[a] > hi).any()]
+        if frente:
+            separadas.append(f"em {nome_curto}, {lista(frente)}")
+    sub = ("Atributos relativos ao início de vida. Cada seta vai da validação, nas 20 células de "
+           "treino com uma de fora por vez, ao teste, nas 8 células nunca vistas; a faixa é o "
+           "intervalo de 95% do teste, de reamostrar células inteiras, e a linha pontilhada é "
+           "prever, no teste, a média do SOH do treino. Com 8 células as faixas são largas: "
+           + ("só não se cruzam " + "; ".join(separadas) if separadas else "todas se cruzam")
+           + ".")
+    pv, pt = val.rmse.rank(method="min").astype(int), te.rmse.rank(method="min").astype(int)
+    a, b = pv.idxmin(), pt.idxmin()
+    if a != b:
+        sub += (f" A ordem também muda: em RMSE, {rot(a)} é o 1º na validação e o {pt[a]}º no "
+                f"teste, e {rot(b)}, o 1º no teste, era o {pv[b]}º na validação.")
+    lados = [f"{lista(ms)} {'erra' if len(ms) == 1 else 'erram'} para {lado}"
+             for lado, ms in (("cima", [rot(m) for m in ordem if te.vies[m] > 0]),
+                              ("baixo", [rot(m) for m in ordem if te.vies[m] < 0])) if ms]
+    sub += (" Viés positivo: o modelo vê a célula mais saudável do que ela está; no teste, "
+            + " e ".join(lados) + ".")
     titulo_figura(plt, fig, "Todas as métricas, algoritmo por algoritmo", sub)
     fig.subplots_adjust(bottom=0.15)
+    _setas(fig, setas)
     salvar(plt, fig, "03_metricas_por_algoritmo.png")
 
 
@@ -1722,6 +1847,7 @@ def main():
             fig_hierarquia(mods, plt, piv, nulo_val, lam)
         fig_metricas(mods, plt, comp, res, nulo_te, ordem, lam)
         fig_previsto_real_todos(mods, plt, prev, res, ordem, lam)
+        fig_celulas_por_modelo(mods, plt, prev, por, ordem, lam)
         fig_erro_por_par(mods, plt, por, res, ordem, lam)
         fig_celulas(mods, plt, prev, por, lam)
         fig_efeitos(mods, plt, curvas, efeitos, rug)

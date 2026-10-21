@@ -31,6 +31,7 @@ falta.
 
 ```
 main.py                    orquestrador: roda a cadeia, pula o que já está feito
+faxina.py                  remove de saida_nasa/ as sobras do layout antigo
 src/                       os 15 scripts, cada um executável sozinho
 cleaned_nasa_dataset/      os dados (não versionados, reconstruídos pelo script)
 manifesto_nasa.csv.gz      as impressões digitais que verificam os dados
@@ -94,6 +95,22 @@ três scripts que têm cache em disco) — sem isso a cascata não serviria de n
 **O download fica fora da cascata.** `preparar_dados.py` baixa 586 MB e só roda
 se `cleaned_nasa_dataset/` não existir; nem `--forcar` o dispara. Para refazer,
 chame o script direto.
+
+### `faxina.py`
+
+```bash
+python faxina.py            # apaga as cópias e as versões antigas
+python faxina.py --orfaos   # apaga também o que não tem par
+```
+
+Quem rodou a cadeia antes da separação em `tabelas/` e `figuras/` fica com as
+saídas antigas soltas na pasta de cada etapa (e em `saida_nasa/graficos/`), lado
+a lado com as novas: `main.py` refaz tudo no lugar novo, mas nunca apaga nada.
+A faxina procura o par de cada arquivo antigo no layout novo e o classifica em
+**cópia** (idêntico byte a byte), **antiga** (o par existe, mas difere) ou
+**órfã** (sem par). As duas primeiras sempre saem; a órfã só com `--orfaos`,
+porque pode ser uma etapa que ainda não rodou no layout novo — rode
+`python main.py` antes. `main.py` avisa ao final quando há sobras.
 
 Cada script continua rodando sozinho, com os próprios argumentos:
 
@@ -789,7 +806,10 @@ validação e no teste (`03_matrizes_de_confusao.png`), todas as métricas com o
 intervalo por células (`04_metricas_por_algoritmo.png`) e o erro de cada
 algoritmo em cada célula de teste (`06_erro_por_celula.png`). Os intervalos de
 acurácia, sensibilidade, especificidade e precisão saem das mesmas
-reamostragens de células das outras métricas. Nada disso escolhe nada.
+reamostragens de células das outras métricas. Em `teste_por_modelo/`,
+`<algoritmo>_por_celula.png` é a `07_teste_por_celula.png` de cada algoritmo:
+os erros dele em cada célula de teste, ao longo dos ciclos. Nada disso escolhe
+nada.
 
 | teste: 718 descargas, 340 em fim de vida | detectado (VP) | não detectado (FN) | alarme falso (FP) | saudável reconhecida (VN) | sensibilidade (IC 95%) | especificidade (IC 95%) | precisão (IC 95%) |
 |---|---|---|---|---|---|---|---|
@@ -903,6 +923,7 @@ Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
 | `06_erro_por_celula.png` | a fração de erro de cada algoritmo em cada célula de teste, com os alarmes falsos e os fins de vida não detectados |
 | `07_teste_por_celula.png` | SOH contra ciclo em cada célula de teste, com os erros do kNN marcados |
 | `08_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
+| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 07 de cada algoritmo, com os erros dele em cada célula de teste |
 
 ## `regressao.py`
 
@@ -913,8 +934,8 @@ python src/regressao.py --sem-referencias  # só o GAM, sem as famílias da lite
 python src/regressao.py --sem-graficos     # só as tabelas
 ```
 
-Escreve `saida_nasa/regressao/`, em cerca de 2,5 min (quase tudo Random Forest e
-Gradient Boosting). Estima o **SOH de cada descarga** a partir do que se mede
+Escreve `saida_nasa/regressao/`, em cerca de 9 min (quase tudo o processo
+gaussiano). Estima o **SOH de cada descarga** a partir do que se mede
 nela — tensão, corrente, temperatura, impedância —, sem a capacidade, que é o
 próprio SOH, e converte a estimativa em **vida útil remanescente (RUL)**, em
 ciclos:
@@ -959,6 +980,16 @@ final usa **13,9 graus de liberdade efetivos**, contra 12 da regressão linear:
 as funções saem quase retas, e o que mais o separa da regressão linear é a borda
 constante.
 
+**As referências: uma por família.** Regressão linear, SVR, Random Forest e
+processo gaussiano, cada um de uma família dos trabalhos relacionados, com os
+hiperparâmetros padrão do scikit-learn — menos o processo gaussiano. O padrão
+dele tem média zero a priori, nenhum ruído e o núcleo fixo, e longe das células
+de treino prevê SOH perto de 0 (RMSE de 86 p.p. na validação). Com a média a
+priori igual à do treino (`normalize_y`) e um termo de ruído (`WhiteKernel`), o
+núcleo sai da verossimilhança marginal, só com o treino de cada rodada. A rede
+neural, a outra família que faltava, extrapola sem freio: deixando B0041 de
+fora, a MLP erra centenas de p.p. nela.
+
 ### Validação: protocolo, rótulos, atributos e algoritmo
 
 | RMSE (p.p.) | relativos | brutos | todos | relativos, partição aleatória | relativos, com os pares artificiais no treino |
@@ -967,24 +998,25 @@ constante.
 | Regressão linear | 11,67 | 7,03 | 8,83 | 5,18 | 8,92 |
 | SVR (RBF) | 6,29 | 5,82 | 5,78 | 4,23 | 5,93 |
 | Random Forest | 4,99 | 5,78 | 5,95 | 1,83 | 7,99 |
-| Gradient Boosting | 5,01 | 5,88 | 6,01 | 1,80 | 8,50 |
+| Processo gaussiano | 7,61 | 9,89 | 6,32 | 2,67 | 9,38 |
 
 Prever a média do SOH do treino dá 11,48.
 
 1. **Protocolo.** A partição aleatória por descarga baixa o RMSE de 1,5 a
-   6,5 p.p. Nas árvores ele cai de 5,0 para 1,8: é o modelo reconhecendo a
-   célula, o mesmo vazamento que a classificação mediu.
+   6,5 p.p. No Random Forest ele cai de 5,0 para 1,8, e no processo gaussiano
+   de 7,6 para 2,7: é o modelo reconhecendo a célula, o mesmo vazamento que a
+   classificação mediu.
 2. **Rótulos.** Os 7 pares de SOH artificial de volta ao treino pioram o
-   Random Forest em 3,0 p.p., o Gradient Boosting em 3,5 e o GAM em 0,9. A
+   Random Forest em 3,0 p.p., o processo gaussiano em 1,8 e o GAM em 0,9. A
    regressão linear melhora 2,8, e não pelo rótulo: eles devolvem ao treino a
    condição 4 A / 4 °C (B0043 e B0044). Sem ela, quando B0041 — a única célula
    avaliável nessa condição — fica de fora, a regressão linear prolonga a reta
    até um RMSE de 59,7 p.p. nela.
-3. **Atributos.** Sem padrão único: os relativos ajudam o GAM (0,4 p.p.) e as
-   árvores (0,8 e 0,9) e atrapalham o SVR (0,5) e a regressão linear (4,6, pela
-   explosão em B0041).
-4. **Algoritmo.** Random Forest e Gradient Boosting ficam à frente, com 5,0; o
-   GAM é o 4º de 5.
+3. **Atributos.** Sem padrão único: os relativos ajudam o GAM (0,4 p.p.), o
+   Random Forest (0,8) e o processo gaussiano (2,3) e atrapalham o SVR (0,5) e
+   a regressão linear (4,6, pela explosão em B0041).
+4. **Algoritmo.** O Random Forest fica à frente, com 5,0; o GAM é o 3º de 5,
+   atrás do SVR.
 
 ### Teste: as 8 células, avaliadas uma vez
 
@@ -994,15 +1026,15 @@ Prever a média do SOH do treino dá 11,48.
 | Regressão linear | 7,29 | 5,03–9,67 | 5,47 | 0,52 | −2,4 | +0,41 (+0,02 a +0,80) |
 | SVR (RBF) | 6,28 | 3,26–8,50 | 4,30 | 0,64 | +2,5 | −0,60 (−3,44 a +1,33) |
 | Random Forest | 8,45 | 4,34–11,11 | 6,14 | 0,35 | +4,0 | +1,57 (−2,64 a +4,60) |
-| Gradient Boosting | 7,72 | 4,12–10,03 | 5,52 | 0,46 | +3,4 | +0,83 (−2,91 a +3,46) |
+| Processo gaussiano | 8,25 | 5,43–10,13 | 6,28 | 0,38 | +4,3 | +1,36 (−1,55 a +3,58) |
 
 Prever a média do treino dá 10,69. Diferença positiva: a referência erra mais
 que o GAM. Os intervalos vêm de reamostrar células inteiras, como na
 classificação.
 
-**A ordem dos algoritmos se inverte de novo.** Random Forest e Gradient
-Boosting, os melhores na validação, são os piores no teste; o GAM sobe de 4º
-para 2º, atrás do SVR. Só a diferença para a regressão linear exclui o zero, e
+**A ordem dos algoritmos se inverte de novo.** O Random Forest, o melhor na
+validação, é o pior no teste; a regressão linear sobe de 5º para 3º, e o GAM de
+3º para 2º, atrás do SVR. Só a diferença para a regressão linear exclui o zero, e
 não resiste à correção de Bonferroni. Com 8 células o teste não separa os
 modelos — o mesmo que a classificação encontrou.
 
@@ -1077,7 +1109,7 @@ ciclo, 5 p.p. de SOH são 40 ciclos.
 | Regressão linear | 18,4 | 7,1 | +2,6 | 36% | 14% |
 | SVR (RBF) | 16,6 | 15,0 | +14,5 | 21% | 8% |
 | Random Forest | 23,7 | 21,0 | +14,9 | 9% | 13% |
-| Gradient Boosting | 21,8 | 20,2 | +12,3 | 13% | 11% |
+| Processo gaussiano | 26,8 | 27,2 | +22,3 | 5% | 4% |
 
 | par de teste | fim de vida | MAE do GAM | MAE do oráculo | viés do SOH do GAM | o mesmo, em ciclos |
 |---|---|---|---|---|---|
@@ -1125,21 +1157,27 @@ As quatro referências saem com o mesmo detalhe do GAM: todas as métricas com o
 intervalo por células (`03_metricas_por_algoritmo.png`), o SOH estimado contra o
 medido (`04_previsto_vs_real_por_algoritmo.png`), o erro em cada par de teste
 (`05_erro_por_par.png`) e o RUL nos pares que chegam a 80%
-(`09_rul_teste_por_algoritmo.png`). Cortado em 80%, o SOH estimado vira uma
+(`09_rul_teste_por_algoritmo.png`). Em `teste_por_modelo/`,
+`<algoritmo>_por_celula.png` é a `06_teste_por_celula.png` de cada algoritmo,
+com o eixo de cada par igual nas cinco. Cortado em 80%, o SOH estimado vira uma
 classificação de fim de vida, com a mesma matriz de confusão da classificação:
 
 | teste: 672 descargas, 317 em fim de vida | detectado | não percebido | alarme falso | saudável reconhecida | viés do SOH (IC 95%) |
 |---|---|---|---|---|---|
 | **GAM (λ = 3×10⁴)** | 278 | 39 | 45 | 310 | −2,2 p.p. (−5,1 a +0,4) |
 | Random Forest | 112 | 205 | 28 | 327 | +4,0 (−1,2 a +8,4) |
-| Gradient Boosting | 128 | 189 | 34 | 321 | +3,4 (−1,2 a +7,3) |
 | SVR (RBF) | 177 | 140 | 3 | 352 | +2,5 (−0,6 a +4,9) |
+| Processo gaussiano | 49 | 268 | 2 | 353 | +4,3 (−0,4 a +7,3) |
 | Regressão linear | 277 | 40 | 48 | 307 | −2,4 (−5,4 a +0,4) |
 
 - **Menor RMSE não quer dizer melhor alarme.** O SVR tem o menor RMSE (6,28
   p.p.) e não percebe 140 das 317 descargas em fim de vida (44%); Random Forest
-  e Gradient Boosting não percebem 65% e 60%. Os três veem, em média, as células
-  mais saudáveis do que estão (+2,5 a +4,0 p.p.). GAM e regressão linear erram
+  e processo gaussiano não percebem 65% e 85%. Os três veem, em média, as
+  células mais saudáveis do que estão (+2,5 a +4,3 p.p.). O processo gaussiano
+  é o caso extremo: longe das células de treino ele volta para a média delas, e
+  nas 280 descargas com SOH medido entre 70% e 80% estima em mediana 84,8%
+  (`teste_por_modelo/processo_gaussiano_por_celula.png`: em B0018, B0034 e
+  B0054 a estimativa trava perto de 85%). GAM e regressão linear erram
   para o outro lado (−2,2 e −2,4 p.p.): deixam passar 12% e 13% do fim de vida,
   ao custo de 45 e 48 alarmes falsos. Com 8 células nenhum desses vieses é
   firme — todos os intervalos incluem o zero —, então a diferença nos fins de
@@ -1147,19 +1185,19 @@ classificação de fim de vida, com a mesma matriz de confusão da classificaç�
 - **Os pares difíceis são os mesmos para os cinco** (`05_erro_por_par.png`). Em
   B0039 a 4 A / 24 °C o RMSE fica entre 24 e 26 p.p. em todos, pelas duas
   leituras isoladas de 25% e 34%; em B0042 a 1 A / 4 °C, o par renormalizado,
-  todos estimam o SOH de 8 a 11 p.p. abaixo do medido. Em 7 dos 10 pares os
+  todos estimam o SOH de 7 a 11 p.p. abaixo do medido. Em 7 dos 10 pares os
   cinco erram para o mesmo lado: o lado do erro depende mais do par que do
   algoritmo.
 - **Onde eles se separam.** A alternância de tensão e temperatura de B0054 pesa
-  muito mais no GAM e na regressão linear (RMSE de 10,0 e 11,2 p.p.) que no SVR
-  e nas árvores (de 4,4 a 5,2). Em B0034 é o contrário: Random Forest e
-  Gradient Boosting superestimam o SOH em 12,0 e 10,5 p.p. (RMSE de 12,5 e
-  10,9), e o GAM erra 5,8, com viés de +0,4.
+  muito mais no GAM e na regressão linear (RMSE de 10,0 e 11,2 p.p.) que no
+  SVR, no Random Forest e no processo gaussiano (de 4,4 a 7,0). Em B0034 é o
+  contrário: Random Forest e processo gaussiano superestimam o SOH em 12,0 e
+  9,8 p.p. (RMSE de 12,5 e 10,8), e o GAM erra 5,8, com viés de +0,4.
 - **No RUL, SVR e GAM ficam próximos na média, por caminhos opostos**
   (`09_rul_teste_por_algoritmo.png`). Nos 4 pares, o SVR erra 16,6 ciclos e o
   GAM 17,1, mas o GAM acerta B0018 (5,5 ciclos, contra 18,2 do SVR) e erra
   B0054 (32,4 contra 12,6); a regressão linear se parece com o GAM nos dois.
-  Random Forest e Gradient Boosting erram 21,3 e 20,0 ciclos em B0018, onde o
+  Random Forest e processo gaussiano erram 21,3 e 30,9 ciclos em B0018, onde o
   viés positivo do SOH vira vida remanescente longa demais. Em B0034, de fim de
   vida artificial, todos erram de 56 a 100 ciclos.
 
@@ -1194,6 +1232,7 @@ Em `saida_nasa/regressao/figuras/`, na ordem do artigo:
 | `07_efeitos_gam.png` | o que move o SOH segundo o GAM, atributo por atributo |
 | `08_rul_conversoes.png` | taxa da condição contra tendência da célula, por fração da vida |
 | `09_rul_teste_por_algoritmo.png` | o RUL de cada algoritmo nos pares de teste que chegam a 80%, com o oráculo |
+| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 06 de cada algoritmo, com o SOH medido e o estimado em cada par de teste |
 
 
 ## O que os dados exigem cuidado

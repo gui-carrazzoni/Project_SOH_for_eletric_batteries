@@ -85,13 +85,16 @@ as quatro nao.
 detalhe do kNN: matriz de confusao na validacao e no teste
 (03_matrizes_de_confusao.png), todas as metricas com o intervalo por celulas
 (04_metricas_por_algoritmo.png), as curvas ROC (05_curvas_roc.png) e o erro em
-cada celula de teste (06_erro_por_celula.png). Nada disso escolhe nada; e o que
-permite discutir os cinco lado a lado, e nao so o kNN.
+cada celula de teste (06_erro_por_celula.png). Em teste_por_modelo/,
+<algoritmo>_por_celula.png e a 07 de cada algoritmo: os erros dele em cada
+celula de teste, ao longo dos ciclos. Nada disso escolhe nada; e o que permite
+discutir os cinco lado a lado, e nao so o kNN.
 
 **Onde fica cada coisa.** As tabelas vao para saida_nasa/classificacao/tabelas/
 e os graficos para saida_nasa/classificacao/figuras/, numerados na ordem do
 artigo: validacao (01 e 02), teste de todos os algoritmos (03 a 06), os erros do
-kNN ao longo dos ciclos (07) e a variante pos-hoc (08).
+kNN ao longo dos ciclos (07) e a variante pos-hoc (08). As imagens por
+algoritmo ficam em figuras/teste_por_modelo/.
 
 **Variante pos-hoc: vizinhos so do mesmo grupo de comportamento.** Na analise
 dos erros do teste, mais da metade dos vizinhos que enganaram B0018 vinha de
@@ -131,6 +134,8 @@ PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
 SURF, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e3e2de"
 MUTED = "#898781"          # o que o kNN acertou: fundo, para o erro aparecer
 SEQ = ["#f0efec", "#cfe0f5", "#9dc3ea", "#6d9fe4", "#2a78d6", "#104281"]
+FAIXA = SEQ[1]             # intervalo de confianca: o azul do teste, lavado
+RECUO_SETA = 6.5           # pt: a seta para antes do centro do marcador, sem cobri-lo
 
 ALVO = "SOH"
 FIM_DE_VIDA = 80.0         # limiar de 80% do artigo, em SOH (%)
@@ -181,6 +186,12 @@ def p(msg: str = "") -> None:
 def virg(v, casas=1):
     """Numero com virgula decimal, como manda a norma brasileira."""
     return f"{v:.{casas}f}".replace(".", ",").replace("-", "−")
+
+
+def sinal(v, casas=1):
+    """+7,4 / −1,3: uma diferenca com sinal, nos graficos. O que arredonda a zero sai 0,0."""
+    v = round(float(v), casas) + 0.0
+    return ("+" if v > 0 else "") + virg(v, casas)
 
 
 def checar():
@@ -848,7 +859,7 @@ def titulo_figura(plt, fig, texto, sub):
 
 
 def salvar(plt, fig, nome):
-    FIGURAS.mkdir(parents=True, exist_ok=True)
+    (FIGURAS / nome).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURAS / nome, bbox_inches="tight")
     plt.close(fig)
     p(f"  {nome}")
@@ -860,6 +871,23 @@ def _tinta(cor):
     lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in to_rgb(cor)]
     lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
     return INK if lum > 0.18 else SURF
+
+
+def _setas(fig, setas):
+    """Setas horizontais (ax, x0, x1, y), desenhadas depois do layout.
+
+    So com o layout pronto se sabe quantos pontos ha entre os dois marcadores.
+    Onde a ponta nao cabe, os marcadores quase se tocam e a seta fica de fora:
+    a diferenca e pequena demais para a direcao importar.
+    """
+    for ax, x0, x1, y in setas:
+        (a, _), (b, _) = ax.transData.transform([(x0, y), (x1, y)])
+        if abs(b - a) * 72 / fig.dpi < 2 * RECUO_SETA + 5:
+            continue
+        ax.annotate("", xy=(x1, y), xytext=(x0, y), zorder=2, annotation_clip=False,
+                    arrowprops=dict(arrowstyle="-|>", color=INK2, linewidth=1.4,
+                                    mutation_scale=10, shrinkA=RECUO_SETA,
+                                    shrinkB=RECUO_SETA))
 
 
 def fig_escolha_k(mods, plt, tab, k, tolerancia):
@@ -903,69 +931,93 @@ def fig_escolha_k(mods, plt, tab, k, tolerancia):
 
 def fig_hierarquia(mods, plt, piv, nome_knn):
     np = mods["numpy"]
+    from matplotlib.lines import Line2D
     refs = [m for m in piv.sort_values("relativas", ascending=False).index if m != nome_knn]
     piv = piv.loc[[nome_knn] + refs]
     n = len(piv)
-    fig, ax = plt.subplots(figsize=(10, 0.62 * n + 3.1))
     ys = np.arange(n)[::-1]
-    cols = [c for c in CONJUNTOS if c in piv.columns]
-    for y, (_, r) in zip(ys, piv.iterrows()):
-        ax.plot([100 * r[cols].min(), 100 * r.aleatoria], [y, y], color=GRID,
-                linewidth=3, solid_capstyle="round", zorder=1)
-    # Bruto e completo saem um pouco da linha: quando dois conjuntos empatam, um
-    # marcador cobriria o outro. O relativo e o vazado ficam na linha.
-    desvio = {"brutas": 0.14, "todas": -0.14, "relativas": 0.0}
-    for c in [c for c in ("brutas", "todas", "relativas") if c in cols]:
-        cor, mk = COR_CONJUNTO[c]
-        ax.scatter(100 * piv[c], ys + desvio[c], s=80, color=cor, marker=mk,
-                   edgecolors=SURF, linewidths=1.5, zorder=3, label=NOME_CONJUNTO[c])
-    ax.scatter(100 * piv.aleatoria, ys, s=80, marker="D", facecolors=SURF,
-               edgecolors=PAL[0], linewidths=1.8, zorder=3,
-               label="relativos, partição aleatória (vazada)")
-    ax.axvline(50, color=INK2, linewidth=1, linestyle=":", zorder=0)
-    ax.text(50.5, -0.55, "acaso", fontsize=9, color=INK2, va="bottom", ha="left")
-    ax.set_yticks(ys, [ROTULO_MODELO.get(m, m) for m in piv.index])
-    for t in ax.get_yticklabels():
+    # Uma escolha por painel e uma seta por algoritmo: do que sai ao que entra,
+    # com o resto fixo, e a mudanca escrita sobre a seta. O losango cheio, o
+    # resultado honesto com os atributos relativos, e a ponta da seta dos
+    # atributos e o pe da seta do protocolo. O conjunto completo fica na tabela:
+    # nao responde a nenhuma das duas perguntas.
+    marca = {"brutas": dict(marker="o", markersize=9, markerfacecolor=PAL[7],
+                            markeredgecolor=SURF, markeredgewidth=1.5),
+             "relativas": dict(marker="D", markersize=8.5, markerfacecolor=PAL[0],
+                               markeredgecolor=SURF, markeredgewidth=1.5),
+             "aleatoria": dict(marker="D", markersize=8.5, markerfacecolor=SURF,
+                               markeredgecolor=PAL[0], markeredgewidth=1.8)}
+    paineis = []
+    if "brutas" in piv.columns:
+        paineis.append(("Atributos: brutos → relativos",
+                        ("brutas", "atributos brutos"), ("relativas", "atributos relativos")))
+    paineis.append(("Protocolo: uma célula de fora → aleatória",
+                    ("relativas", "uma célula de fora por vez"),
+                    ("aleatoria", "partição aleatória (vazada)")))
+    fig, axes = plt.subplots(1, len(paineis), figsize=(5.2 * len(paineis) + 1.9, 0.62 * n + 3.6),
+                             sharex=True, sharey=True, squeeze=False)
+    setas = []
+    for ax, (titulo, (de, rot_de), (para, rot_para)) in zip(axes[0], paineis):
+        for y, a, b in zip(ys, 100 * piv[de], 100 * piv[para]):
+            setas.append((ax, a, b, y))
+            ax.text((a + b) / 2, y + 0.17, sinal(b - a), fontsize=9, color=INK2,
+                    ha="center", va="bottom")
+        for c in (de, para):
+            ax.plot(100 * piv[c], ys, linestyle="", zorder=3, clip_on=False, **marca[c])
+        ax.axvline(50, color=INK2, linewidth=1, linestyle=":", zorder=0)
+        ax.text(50.5, -0.6, "acaso", fontsize=9, color=INK2, va="bottom", ha="left")
+        ax.set_title(titulo, loc="left", fontsize=11, color=INK, pad=24)
+        ax.legend(handles=[Line2D([], [], linestyle="", label=rot, **marca[c])
+                           for c, rot in ((de, rot_de), (para, rot_para))],
+                  fontsize=9, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=2,
+                  borderaxespad=0.2, handletextpad=0.2, columnspacing=1.4)
+        ax.set_xlabel("acurácia balanceada (%)")
+        ax.grid(axis="y", visible=False)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+    ax.set_xlim(45, 100)
+    ax.set_ylim(-0.7, n - 0.3)
+    axes[0, 0].set_yticks(ys, [ROTULO_MODELO.get(m, m) for m in piv.index])
+    for t in axes[0, 0].get_yticklabels():
         if t.get_text() == nome_knn:
             t.set_fontweight("bold")
             t.set_color(INK)
-    ax.set_xlim(45, 100)
-    ax.set_ylim(-0.7, n - 0.3)
-    ax.set_xlabel("acurácia balanceada (%)")
-    ax.grid(axis="y", visible=False)
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.legend(fontsize=9, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2,
-              borderaxespad=0.4)
 
-    inflacao = 100 * (piv.aleatoria - piv.relativas)
-    sub = ("Acurácia balanceada nas 25 células de treino. Pontos cheios: validação que "
-           "deixa uma célula de fora por vez; losango vazado: a mesma conta com partição "
-           "aleatória por descarga, que põe a mesma célula dos dois lados. "
-           f"A partição aleatória soma de {virg(inflacao.min(), 0)} a "
-           f"{virg(inflacao.max(), 0)} p.p.")
-    if "brutas" in cols:
-        efeito = 100 * (piv.relativas - piv.brutas)
-        sub += (f"; trocar atributos brutos por relativos muda de "
-                f"{virg(efeito.min(), 0)} a {virg(efeito.max(), 0)} p.p.")
+    rot = lambda m: ROTULO_MODELO.get(m, m)
+    # Espaco inseparavel antes de "p.p.": a quebra de linha nao separa o numero da unidade.
+    faixa = lambda s: f"de {sinal(s.min())} a {sinal(s.max())}\u00a0p.p."
+    sub = ("Validação nas 25 células de treino. Cada seta troca uma escolha e mantém o resto; o "
+           "número sobre ela é quanto a acurácia balanceada muda, em p.p.")
+    if "brutas" in piv.columns:
+        sub += f" Atributos relativos no lugar dos brutos: {faixa(100 * (piv.relativas - piv.brutas))}"
+    sub += (" Partição aleatória por descarga no lugar de deixar uma célula de fora: "
+            f"{faixa(100 * (piv.aleatoria - piv.relativas))}, um ganho que só existe porque a "
+            "mesma célula fica no treino e na validação.")
     if refs:
-        dif = 100 * (piv.relativas[nome_knn] - piv.relativas[refs].max())
-        lado = "acima" if dif >= 0 else "abaixo"
-        sub += (f"; com os atributos relativos, o kNN fica {virg(abs(dif), 1)} p.p. {lado} "
-                f"da melhor das famílias dos trabalhos relacionados (as demais linhas, com "
-                f"hiperparâmetros padrão)")
-    titulo_figura(plt, fig, "Protocolo, atributos e algoritmo: o que mais pesa", sub + ".")
+        rel = 100 * piv.relativas.sort_values(ascending=False)
+        sub += (f" Entre os algoritmos, nos losangos cheios, a distância chega a "
+                f"{virg(rel.iloc[0] - rel.iloc[-1])}\u00a0p.p., e {rot(rel.index[0])} e "
+                f"{rot(rel.index[1])} ficam a {virg(rel.iloc[0] - rel.iloc[1])}\u00a0p.p. um do outro.")
+    titulo_figura(plt, fig, "Protocolo, atributos e algoritmo: o que mais pesa", sub)
+    _setas(fig, setas)
     salvar(plt, fig, "02_protocolo_atributos_algoritmo.png")
 
 
-def fig_celulas(mods, plt, prev, k):
+def _grade_celulas(plt, prev, acerto, rotulo_erro):
+    """Um painel por celula de teste numa condicao: o SOH ao longo dos ciclos,
+    com as descargas classificadas errado em destaque.
+
+    `acerto` diz, descarga a descarga de `prev`, se a classe prevista bateu. O
+    eixo de SOH de cada painel so depende do medido.
+    """
     from matplotlib.lines import Line2D
-    grupos = list(prev.groupby(["battery_id", "test_condition"], sort=True))
+    grupos = list(prev.assign(certo=acerto).groupby(["battery_id", "test_condition"],
+                                                    sort=True))
     ncol = 4
     nlin = -(-len(grupos) // ncol)
     fig, axes = plt.subplots(nlin, ncol, figsize=(13, 2.9 * nlin + 1.9), squeeze=False)
     for i, (ax, ((bat, cond), g)) in enumerate(zip(axes.flat, grupos)):
-        certo = g.acerto.to_numpy()
+        certo = g.certo.to_numpy()
         ax.axhline(FIM_DE_VIDA, color=INK2, linestyle="--", linewidth=1.1, zorder=1)
         ax.scatter(g.ciclo[certo], g[ALVO][certo], s=14, color=MUTED, alpha=0.6,
                    linewidths=0, zorder=2)
@@ -984,7 +1036,7 @@ def fig_celulas(mods, plt, prev, k):
     alcas = [Line2D([], [], color=MUTED, marker="o", linestyle="", markersize=6,
                     label="classificada certo"),
              Line2D([], [], color=PAL[1], marker="X", linestyle="", markersize=8,
-                    markeredgecolor=SURF, label="erro do kNN"),
+                    markeredgecolor=SURF, label=rotulo_erro),
              Line2D([], [], color=INK2, linestyle="--", linewidth=1.1,
                     label=f"limiar de fim de vida ({FIM_DE_VIDA:.0f}%)")]
     sobra = list(axes.flat)[len(grupos):]
@@ -994,14 +1046,44 @@ def fig_celulas(mods, plt, prev, k):
         sobra[0].legend(handles=alcas, loc="center", fontsize=9.5)
     else:
         fig.legend(handles=alcas, loc="lower center", ncol=3, fontsize=9.5)
-    erros = prev[~prev.acerto]
+    return fig
+
+
+def _frase_erros(prev, acerto):
+    """O que a grade de celulas mostra dos erros, para o subtitulo."""
+    erros = prev[~acerto]
     perto = ((erros[ALVO] - FIM_DE_VIDA).abs() < PERTO_DO_LIMIAR).mean() if len(erros) else 0
+    return (f"Acima da linha de {FIM_DE_VIDA:.0f}% o erro é alarme falso; abaixo, fim de vida "
+            f"não detectado. {virg(100 * perto, 0)}% dos {len(erros)} erros ficam a menos de "
+            f"{virg(PERTO_DO_LIMIAR, 0)} p.p. do limiar.")
+
+
+def fig_celulas(mods, plt, prev, k):
+    acerto = prev.acerto.to_numpy()
+    fig = _grade_celulas(plt, prev, acerto, "erro do kNN")
     sub = (f"Cada painel é uma célula de teste numa condição de ensaio, com o kNN de k = {k}. "
-           f"Acima da linha de {FIM_DE_VIDA:.0f}% o erro é alarme falso; abaixo, fim de vida "
-           f"não detectado. {virg(100 * perto, 0)}% dos {len(erros)} erros ficam a menos de "
-           f"{virg(PERTO_DO_LIMIAR, 0)} p.p. do limiar.")
+           + _frase_erros(prev, acerto))
     titulo_figura(plt, fig, "Onde o kNN erra", sub)
     salvar(plt, fig, "07_teste_por_celula.png")
+
+
+def fig_celulas_por_modelo(mods, plt, prev, ordem):
+    """A 07 para cada algoritmo, em teste_por_modelo/<algoritmo>_por_celula.png.
+
+    O eixo de SOH de cada celula so depende do medido, entao ja e o mesmo nas
+    imagens de todos os algoritmos, e elas se comparam lado a lado.
+    """
+    for nome in ordem:
+        knn = nome == ordem[0]
+        prevista = prev.previsto if knn else prev[f"previsto_{SLUG[nome]}"]
+        acerto = (prevista == prev.fim_de_vida).to_numpy()
+        fig = _grade_celulas(plt, prev, acerto, "classificada errado")
+        sub = ("Cada painel é uma célula de teste numa condição de ensaio, com o algoritmo "
+               "ajustado nas 25 células de treino, com os atributos relativos ao início de vida. "
+               + _frase_erros(prev, acerto))
+        titulo_figura(plt, fig, f"{ROTULO_MODELO.get(nome, nome)}: erros em cada célula de teste",
+                      sub)
+        salvar(plt, fig, f"teste_por_modelo/{'knn' if knn else SLUG[nome]}_por_celula.png")
 
 
 def fig_roc(mods, plt, y, escores, res):
@@ -1156,7 +1238,7 @@ def fig_matrizes(mods, plt, comp, res, ordem):
 
 
 def fig_metricas(mods, plt, comp, res, ordem):
-    """Todas as metricas de cada algoritmo: o teste com intervalo, ao lado da validacao."""
+    """Todas as metricas de cada algoritmo: da validacao ao teste, com o intervalo do teste."""
     np = mods["numpy"]
     from matplotlib.lines import Line2D
     from matplotlib.ticker import FixedLocator, FuncFormatter
@@ -1174,18 +1256,23 @@ def fig_metricas(mods, plt, comp, res, ordem):
                 "precisão", 100, None),
                ("f1_fim_de_vida", "f1_", "F1 do fim de vida", "F1", 1, None),
                ("auc", "auc_", "AUC", "AUC", 1, 0.5)]
+    valid = dict(marker="o", markersize=7.5, markerfacecolor=SURF, markeredgecolor=INK2,
+                 markeredgewidth=1.5)
+    teste = dict(marker="D", markersize=8, markerfacecolor=PAL[0], markeredgecolor=SURF,
+                 markeredgewidth=1.3)
     n = len(ordem)
-    fig, axes = plt.subplots(2, 3, figsize=(13, 1.1 * n + 4.4), sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(13, 0.95 * n + 4.6), sharey=True)
     ys = np.arange(n)[::-1]
+    setas = []
     for ax, (col, pre, titulo, _c, escala, acaso) in zip(axes.flat, paineis):
-        # Teste e validacao em alturas um pouco diferentes: quando os dois
-        # coincidem, o circulo cobriria o losango.
-        ax.hlines(ys - 0.1, escala * te[f"{pre}ic95_inferior"],
-                  escala * te[f"{pre}ic95_superior"], color=PAL[0], linewidth=2, zorder=2)
-        ax.scatter(escala * te[col], ys - 0.1, s=60, marker="D", color=PAL[0],
-                   edgecolors=SURF, linewidths=1.3, zorder=3, clip_on=False)
-        ax.scatter(escala * val[col], ys + 0.14, s=52, marker="o", facecolors=SURF,
-                   edgecolors=INK2, linewidths=1.5, zorder=3, clip_on=False)
+        # Uma linha por algoritmo: a faixa e o intervalo do teste, e a seta vai
+        # da validacao ao teste. Quem cai, quem sobe, e quanto a faixa deixa
+        # afirmar, sem um marcador fora da linha do seu algoritmo.
+        ax.hlines(ys, escala * te[f"{pre}ic95_inferior"], escala * te[f"{pre}ic95_superior"],
+                  color=FAIXA, linewidth=9, capstyle="butt", zorder=1)
+        ax.plot(escala * val[col], ys, linestyle="", zorder=3, clip_on=False, **valid)
+        ax.plot(escala * te[col], ys, linestyle="", zorder=4, clip_on=False, **teste)
+        setas += [(ax, escala * v, escala * t, y) for v, t, y in zip(val[col], te[col], ys)]
         if acaso is not None:
             ax.axvline(acaso, color=INK2, linewidth=1, linestyle=":", zorder=0)
             ax.text(acaso + 0.012 * escala, -0.62, "acaso", fontsize=8.5, color=INK2,
@@ -1206,24 +1293,37 @@ def fig_metricas(mods, plt, comp, res, ordem):
             if tk.get_text() == nome_knn:
                 tk.set_fontweight("bold")
                 tk.set_color(INK)
-    alcas = [Line2D([], [], color=PAL[0], marker="D", markersize=7, markeredgecolor=SURF,
-                    linewidth=2, label="teste: 8 células, com IC 95% por reamostragem de células"),
-             Line2D([], [], color=INK2, marker="o", markersize=7, markerfacecolor=SURF,
-                    markeredgewidth=1.5, linestyle="",
-                    label="validação: 25 células de treino, uma de fora por vez")]
-    fig.legend(handles=alcas, loc="lower center", ncol=2, fontsize=9.5,
+    alcas = [Line2D([], [], linestyle="", label="validação: 25 células de treino, uma de fora por vez",
+                    **valid),
+             Line2D([], [], linestyle="", label="teste: 8 células nunca vistas", **teste),
+             Line2D([], [], color=FAIXA, linewidth=9, solid_capstyle="butt",
+                    label="IC 95% do teste, reamostrando células inteiras")]
+    fig.legend(handles=alcas, loc="lower center", ncol=3, fontsize=9.5,
                bbox_to_anchor=(0.5, -0.01))
-    lider = {}
-    for col, _p, _t, nome_curto, _e, _a in paineis:
-        lider.setdefault(te[col].idxmax(), []).append(nome_curto)
-    sub = ("Atributos relativos ao início de vida. O losango é o teste nas 8 células nunca vistas, "
-           "com o intervalo de 95% de reamostrar células inteiras; o círculo vazado é a validação "
-           "nas 25 células de treino, uma de fora por vez, com os escores das 25 rodadas juntados "
-           "para a AUC. Lideram no teste: "
-           + "; ".join(f"{ROTULO_MODELO.get(m, m)} em {lista(ms)}" for m, ms in lider.items())
-           + ".")
+    rot = lambda m: ROTULO_MODELO.get(m, m)
+    # Faixas que nao se cruzam: o unico caso em que o grafico, sozinho, separa
+    # dois algoritmos. A diferenca pareada de teste.csv e mais sensivel.
+    separadas = []
+    for col, pre, _t, nome_curto, _e, _a in paineis:
+        lo, hi = te[f"{pre}ic95_inferior"], te[f"{pre}ic95_superior"]
+        frente = [f"{rot(a)} à frente de {lista([rot(b) for b in ordem if lo[a] > hi[b]])}"
+                  for a in ordem if (lo[a] > hi).any()]
+        if frente:
+            separadas.append(f"em {nome_curto}, {lista(frente)}")
+    sub = ("Atributos relativos ao início de vida. Cada seta vai da validação, nas 25 células de "
+           "treino com uma de fora por vez, ao teste, nas 8 células nunca vistas; a faixa é o "
+           "intervalo de 95% do teste, de reamostrar células inteiras. Com 8 células as faixas "
+           "são largas: " + ("só não se cruzam " + "; ".join(separadas) if separadas
+                             else "todas se cruzam") + ".")
+    pv = val.acuracia_balanceada.rank(ascending=False, method="min").astype(int)
+    pt = te.acuracia_balanceada.rank(ascending=False, method="min").astype(int)
+    a, b = pv.idxmin(), pt.idxmin()
+    if a != b:
+        sub += (f" A ordem também muda: em acurácia balanceada, {rot(a)} é o 1º na validação e o "
+                f"{pt[a]}º no teste, e {rot(b)}, o 1º no teste, era o {pv[b]}º na validação.")
     titulo_figura(plt, fig, "Todas as métricas, algoritmo por algoritmo", sub)
     fig.subplots_adjust(bottom=0.11)
+    _setas(fig, setas)
     salvar(plt, fig, "04_metricas_por_algoritmo.png")
 
 
@@ -1373,6 +1473,7 @@ def main():
         fig_roc(mods, plt, y_te, escores, res)
         fig_erro_celulas(mods, plt, por, res, ordem)
         fig_celulas(mods, plt, prev, k)
+        fig_celulas_por_modelo(mods, plt, prev, ordem)
         if variante:
             fig_variante(mods, plt, variante[0], variante[2])
     p("")

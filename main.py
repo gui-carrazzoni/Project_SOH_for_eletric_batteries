@@ -115,6 +115,16 @@ def p(msg: str = "") -> None:
         sys.exit(0)
 
 
+def avisar_sobras() -> None:
+    """O main nunca apaga nada; so aponta o layout antigo para a faxina."""
+    from faxina import fora_do_layout
+    n = len(fora_do_layout())
+    if n:
+        p("")
+        p(f"  aviso: {n} arquivo(s) do layout antigo em saida_nasa/, fora de figuras/ e")
+        p("  tabelas/. Para limpar:  python faxina.py")
+
+
 def duracao(seg: float) -> str:
     return f"{seg:.0f}s" if seg < 60 else f"{seg / 60:.1f}min"
 
@@ -129,6 +139,7 @@ def listar() -> None:
     p("")
     p("  'feito' quer dizer que o arquivo-alvo da etapa existe. Para ver qual:")
     p("      python main.py --listar --alvos")
+    avisar_sobras()
 
 
 def listar_alvos() -> None:
@@ -232,6 +243,7 @@ def main() -> int:
         p("  nada a fazer: a cadeia inteira ja estava feita.")
         p("  Use --forcar para refazer, ou --refazer <etapa> a partir de um ponto.")
     p(f"  tempo total: {duracao(time.time() - t0)}")
+    avisar_sobras()
     return 0
 
 
