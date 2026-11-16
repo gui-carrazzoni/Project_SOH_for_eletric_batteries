@@ -86,14 +86,24 @@ ETAPAS = [
     ("carga", "carga.py", [],
      "saida_nasa/carga/tabelas/features_carga.csv", ["--remontar"],
      "a carga como processo proprio"),
-    # As duas ultimas leem so a saida de normalizar.py, mas ficam no fim: ali
-    # qualquer etapa que rode antes delas as dispara, e elas nao disparam ninguem.
+    # Os modelos leem a saida de normalizar.py (e, com --com-grupo, a de
+    # grupos.py), mas ficam no fim: ali qualquer etapa que rode antes deles os
+    # dispara. baterias_por_condicao.py le os quatro e fecha a cadeia.
     ("classificacao", "classificacao.py", [],
      "saida_nasa/classificacao/tabelas/teste.csv", [],
      "fim de vida: kNN e as familias da literatura, lado a lado"),
     ("regressao", "regressao.py", [],
      "saida_nasa/regressao/tabelas/teste.csv", [],
      "SOH: GAM e as familias da literatura, e o RUL"),
+    ("classificacao_grupo", "classificacao.py", ["--com-grupo"],
+     "saida_nasa/baterias_por_condicao/classificacao/tabelas/teste.csv", [],
+     "a classificacao com baterias_por_condicao entre os atributos"),
+    ("regressao_grupo", "regressao.py", ["--com-grupo"],
+     "saida_nasa/baterias_por_condicao/regressao/tabelas/teste.csv", [],
+     "a regressao com baterias_por_condicao entre os atributos"),
+    ("baterias_por_condicao", "baterias_por_condicao.py", [],
+     "saida_nasa/baterias_por_condicao/comparacao/tabelas/efeito_nos_modelos.csv", [],
+     "correlacao da variavel com o SOH e o efeito dela nos modelos"),
 ]
 
 NOMES = [e[0] for e in ETAPAS]
@@ -132,10 +142,10 @@ def duracao(seg: float) -> str:
 def listar() -> None:
     p("Etapas da cadeia")
     p("=" * 72)
-    p(f"  {'#':<3} {'etapa':<16} {'estado':<10} o que faz")
+    p(f"  {'#':<3} {'etapa':<22} {'estado':<10} o que faz")
     for i, (nome, _s, _a, alvo, _f, desc) in enumerate(ETAPAS, 1):
         estado = "feito" if (RAIZ / alvo).exists() else "pendente"
-        p(f"  {i:<3} {nome:<16} {estado:<10} {desc}")
+        p(f"  {i:<3} {nome:<22} {estado:<10} {desc}")
     p("")
     p("  'feito' quer dizer que o arquivo-alvo da etapa existe. Para ver qual:")
     p("      python main.py --listar --alvos")
@@ -147,7 +157,7 @@ def listar_alvos() -> None:
     p("  alvos:")
     for nome, _s, _a, alvo, _f, _d in ETAPAS:
         marca = "ok  " if (RAIZ / alvo).exists() else "--  "
-        p(f"    {marca}{nome:<16} {alvo}")
+        p(f"    {marca}{nome:<22} {alvo}")
 
 
 def rodar(nome, script, args, refazendo) -> bool:

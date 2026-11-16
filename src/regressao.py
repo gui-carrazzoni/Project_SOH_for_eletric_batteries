@@ -8,9 +8,11 @@ remanescente (RUL).
     python regressao.py --lam 10000        # forca lambda
     python regressao.py --sem-referencias  # so o GAM, sem as familias da literatura
     python regressao.py --sem-graficos     # so as tabelas
+    python regressao.py --com-grupo        # com baterias_por_condicao entre os atributos
 
 Le saida_nasa/normalizado/tabelas/dados_normalizados.csv e escreve em
 saida_nasa/regressao/: as tabelas em tabelas/, os graficos em figuras/.
+Com --com-grupo, em saida_nasa/baterias_por_condicao/regressao/.
 
 **A tarefa.** Estimar o SOH (%) de cada descarga a partir do que se mede nela —
 tensao, corrente, temperatura, impedancia —, sem a capacidade, que e o proprio
@@ -139,6 +141,16 @@ ao melhor; o Gradient Boosting foi fixado, nao ajustado. A ideia veio depois de 
 teste ser visto, entao o numero do teste nao e avaliacao independente, e ela
 roda a parte, sem entrar nas tabelas e nos graficos dos cinco algoritmos.
 
+**--com-grupo: o grupo como atributo.** Tudo de novo, com a variavel
+baterias_por_condicao — o grupo de comportamento do modulo 2, em sete
+indicadores — nos tres conjuntos de atributos. No GAM os indicadores entram
+como reta, como o protocolo. O agrupamento so ve as celulas de treino, e na
+validacao e refeito a cada rodada sem a celula deixada de fora
+(baterias_por_condicao.Codificacao); a particao aleatoria, que ja vaza por
+construcao, usa o de todas as celulas de treino. O ensemble nao roda: nele o
+agrupamento nao e refeito a cada rodada, e o grupo vazaria na validacao.
+baterias_por_condicao.py poe os dois resultados lado a lado.
+
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
 from __future__ import annotations
@@ -164,6 +176,12 @@ BRUTA = RAIZ / "saida_nasa" / "preprocessado" / "tabelas" / "dados_modelagem.csv
 ESCALA = RAIZ / "saida_nasa" / "normalizado" / "tabelas" / "parametros_escala.csv"
 SAIDA = RAIZ / "saida_nasa" / "regressao"
 FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
+# --com-grupo troca a pasta de saida e acrescenta esta frase a todo subtitulo.
+GRUPO = "baterias_por_condicao"
+SAIDA_COM_GRUPO = RAIZ / "saida_nasa" / GRUPO / "regressao"
+NOTA_COM_GRUPO = (" Com baterias_por_condicao, o grupo de comportamento do módulo 2, entre os "
+                  "atributos.")
+NOTA = ""
 
 # Paleta categorica validada para daltonismo (modo claro), slots 1..8 em ordem fixa
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -503,11 +521,13 @@ def metricas(np, y, pred):
             "descargas": len(y)}
 
 
-def prever_fora(mods, modelo, X, y, grupos, treinar, avaliar):
+def prever_fora(mods, modelo, X, y, grupos, treinar, avaliar, rodada=None):
     """Cada grupo com descarga a avaliar e previsto por um modelo ajustado sem ele.
 
     So as descargas de `treinar` entram no ajuste. Grupo sem descarga a avaliar
     nao gera rodada: as 5 celulas que so tem pares fora nao tem o que medir.
+    `rodada(X, te)`, quando dada, devolve o X da rodada: com --com-grupo, os
+    indicadores do agrupamento refeito sem a celula de fora.
     """
     np = mods["numpy"]
     from sklearn.base import clone
@@ -515,7 +535,8 @@ def prever_fora(mods, modelo, X, y, grupos, treinar, avaliar):
     for g in np.unique(grupos[avaliar]):
         te = grupos == g
         base = ~te & treinar
-        pred[te] = clone(modelo).fit(X[base], y[base]).predict(X[te])
+        Xr = X if rodada is None else rodada(X, te)
+        pred[te] = clone(modelo).fit(Xr[base], y[base]).predict(Xr[te])
     return pred
 
 
@@ -730,7 +751,7 @@ def rul_por_par(mods, inst):
 # ---------------------------------------------------------------------------
 # as etapas
 # ---------------------------------------------------------------------------
-def etapa_lambda(mods, tr, conj, tolerancia, lam_forcado):
+def etapa_lambda(mods, tr, conj, tolerancia, lam_forcado, cod=None):
     """RMSE contra lambda em cada conjunto, e o lambda de cada um."""
     np, pd = mods["numpy"], mods["pandas"]
     y, cel, ok = tr[ALVO].to_numpy(float), tr.battery_id.to_numpy(), tr.avaliavel.to_numpy()
@@ -742,7 +763,9 @@ def etapa_lambda(mods, tr, conj, tolerancia, lam_forcado):
     tab = {}
     for n, cols in curvas.items():
         X = tr[cols].to_numpy(float)
-        tab[n] = [metricas(np, y[ok], prever_fora(mods, gam(lam, cols), X, y, cel, ok, ok)[ok])["rmse"]
+        rodada = cod.rodada(cols, cel) if cod else None
+        tab[n] = [metricas(np, y[ok], prever_fora(mods, gam(lam, cols), X, y, cel, ok, ok,
+                                                  rodada)[ok])["rmse"]
                   for lam in GRADE_LAMBDA]
     tab = pd.DataFrame(tab, index=pd.Index(GRADE_LAMBDA, name="lambda"))
     lam_conj = {n: escolher_lambda(tab[n], tolerancia) for n in conj}
@@ -768,8 +791,13 @@ def etapa_lambda(mods, tr, conj, tolerancia, lam_forcado):
     return tab, lam_conj
 
 
-def etapa_comparacao(mods, tr, conj, lam_conj, refs):
-    """Protocolo, rotulos, atributos e algoritmo, so nas celulas de treino."""
+def etapa_comparacao(mods, tr, conj, lam_conj, refs, cod=None):
+    """Protocolo, rotulos, atributos e algoritmo, so nas celulas de treino.
+
+    Com `cod` (--com-grupo), so a validacao por celula troca o agrupamento a
+    cada rodada; a particao aleatoria mistura celulas nos dois lados e fica com
+    o agrupamento de todas as de treino.
+    """
     np, pd = mods["numpy"], mods["pandas"]
     y, cel, ok = tr[ALVO].to_numpy(float), tr.battery_id.to_numpy(), tr.avaliavel.to_numpy()
     tudo = np.ones(len(y), dtype=bool)
@@ -786,7 +814,8 @@ def etapa_comparacao(mods, tr, conj, lam_conj, refs):
                 esquemas += [("aleatoria por descarga", "pares avaliaveis", aleat, ok),
                              ("uma celula de fora", "todos os pares", cel, tudo)]
             for validacao, rotulos, grupos, treinar in esquemas:
-                pred = prever_fora(mods, m, X, y, grupos, treinar, ok)
+                rodada = cod.rodada(cols, cel) if cod and grupos is cel else None
+                pred = prever_fora(mods, m, X, y, grupos, treinar, ok, rodada)
                 if n == "relativas" and grupos is cel and treinar is ok:
                     previsoes[nome] = pred
                 met = metricas(np, y[ok], pred[ok])
@@ -1254,7 +1283,7 @@ def estilo(mods):
 
 def titulo_figura(plt, fig, texto, sub):
     import textwrap
-    linhas = textwrap.wrap(sub, width=int(fig.get_figwidth() * 13.5))
+    linhas = textwrap.wrap(sub + NOTA, width=int(fig.get_figwidth() * 13.5))
     altura_linha = 0.1875 / fig.get_figheight()
     fig.suptitle(texto, fontsize=14, fontweight="bold", color=INK,
                  x=0.007, ha="left", y=0.99)
@@ -1524,7 +1553,8 @@ def fig_efeitos(mods, plt, curvas, resumo, rug):
         ax.set_ylabel("efeito no SOH (p.p.)", fontsize=9.5)
     for ax in list(axes.flat)[len(suaves):]:
         ax.axis("off")
-    retas = resumo[resumo.termo == "reta"]
+    indicador = resumo.coluna.str.startswith(GRUPO + "_")
+    retas = resumo[(resumo.termo == "reta") & ~indicador]
     partes = [f"{FISICO.get(r.coluna, (r.coluna,))[0]} {virg(r.pp_por_unidade, 2)} p.p. por "
               f"{r.unidade}" for r in retas.itertuples()]
     sub = ("Cada painel é uma função f_j do GAM ajustado nas células de treino, na unidade "
@@ -1534,6 +1564,14 @@ def fig_efeitos(mods, plt, curvas, resumo, rug):
            "quantis de 5% e 95% da função nas descargas de treino.")
     if partes:
         sub += " O protocolo entra como reta: " + "; ".join(partes) + "."
+    # Com os sete indicadores juntos so a diferenca entre dois grupos e
+    # identificavel, nao o efeito de cada um sozinho.
+    g = resumo[indicador & resumo.pp_por_unidade.notna()].set_index("coluna").pp_por_unidade
+    if len(g) > 1:
+        rot = lambda c: c[len(GRUPO) + 1:]
+        sub += (f" Os grupos de {GRUPO} entram como indicadores, também como reta: com o resto "
+                f"fixo, o SOH estimado em {rot(g.idxmax())} fica {virg(g.max() - g.min(), 2)} p.p. "
+                f"acima do estimado em {rot(g.idxmin())}, os dois extremos.")
     titulo_figura(plt, fig, "O que move o SOH, segundo o GAM", sub)
     salvar(plt, fig, "07_efeitos_gam.png")
 
@@ -2035,18 +2073,33 @@ def main():
     ap.add_argument("--sem-referencias", action="store_true",
                     help="so o GAM, sem as familias dos trabalhos relacionados")
     ap.add_argument("--sem-graficos", action="store_true")
+    ap.add_argument("--com-grupo", action="store_true",
+                    help=f"com {GRUPO} entre os atributos, em saida_nasa/{GRUPO}/regressao/")
     a = ap.parse_args()
 
+    global SAIDA, FIGURAS, TABELAS, NOTA
+    if a.com_grupo:
+        SAIDA, NOTA = SAIDA_COM_GRUPO, NOTA_COM_GRUPO
+        FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
     mods = checar()
     TABELAS.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
-    p("Regressao do SOH com GAM e conversao em RUL")
+    p("Regressao do SOH com GAM e conversao em RUL" + (f", com {GRUPO}" if a.com_grupo else ""))
     p("=" * 60)
     df = carregar(mods)
     conj = conjuntos(df)
     tr = df[df.split == "treino"].reset_index(drop=True)
     te = df[df.split == "teste"].reset_index(drop=True)
+    cod = None
+    if a.com_grupo:
+        from baterias_por_condicao import Codificacao
+        cod = Codificacao(mods, tr, te)
+        cod.relatar(tr, te)
+        conj = {n: cols + cod.colunas for n, cols in conj.items()}
+        # Indicadores de grupo: no GAM entram como reta, como o protocolo.
+        LINEARES.update(cod.colunas)
+        FISICO.update({c: (c, "indicador", 1.0) for c in cod.colunas})
     for nome, d in (("treino", tr), ("teste", te)):
         ok = d[d.avaliavel]
         p(f"  {nome:<6} {len(ok):>4} descargas avaliaveis de {ok.battery_id.nunique():>2} "
@@ -2061,13 +2114,14 @@ def main():
 
     p("")
     p("1. escolha de lambda, uma celula de treino de fora por vez:")
-    tab, lam_conj = etapa_lambda(mods, tr, conj, a.tolerancia, a.lam)
+    tab, lam_conj = etapa_lambda(mods, tr, conj, a.tolerancia, a.lam, cod)
     lam = lam_conj["relativas"]
 
     p("")
     p("2. protocolo, rotulos, atributos e algoritmo (so treino):")
     refs = {} if a.sem_referencias else referencias()
-    comp, piv, val_par, previsoes, nulo_val = etapa_comparacao(mods, tr, conj, lam_conj, refs)
+    comp, piv, val_par, previsoes, nulo_val = etapa_comparacao(mods, tr, conj, lam_conj, refs,
+                                                               cod)
 
     p("")
     p("3. teste: 8 celulas, avaliadas uma vez:")
@@ -2099,7 +2153,10 @@ def main():
 
     p("")
     ens = None
-    if refs:
+    if a.com_grupo:
+        # Nele o agrupamento nao e refeito a cada rodada: o grupo vazaria na validacao.
+        p("6. ensemble pulado: --com-grupo")
+    elif refs:
         p("6. ensemble, pos-hoc (C do SVR e composicao so da validacao):")
         ens = etapa_ensemble(mods, tr, te, conj, lam, refs, previsoes, preds, rul, a.tolerancia)
         prev = prev.assign(**ens["prev"]).merge(

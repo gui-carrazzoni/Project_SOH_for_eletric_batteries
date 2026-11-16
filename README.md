@@ -32,7 +32,7 @@ falta.
 ```
 main.py                    orquestrador: roda a cadeia, pula o que já está feito
 faxina.py                  remove de saida_nasa/ as sobras do layout antigo
-src/                       os 15 scripts, cada um executável sozinho
+src/                       os 16 scripts, cada um executável sozinho
 cleaned_nasa_dataset/      os dados (não versionados, reconstruídos pelo script)
 manifesto_nasa.csv.gz      as impressões digitais que verificam os dados
 saida_nasa/                tudo que a análise produz
@@ -45,6 +45,11 @@ saida_nasa/                tudo que a análise produz
 ├── carga/                 a carga como processo próprio
 ├── classificacao/         fim de vida: kNN e as famílias da literatura, lado a lado
 ├── regressao/             SOH: GAM e as famílias da literatura, e o RUL
+├── baterias_por_condicao/ os modelos com o grupo de comportamento como atributo
+│   ├── correlacao/                           a variável contra o SOH
+│   ├── classificacao/                        classificacao.py --com-grupo
+│   ├── regressao/                            regressao.py --com-grupo
+│   └── comparacao/                           sem e com a variável, lado a lado
 └── cluster/               tudo que é agrupamento
     ├── agrupamento/                          grupos descobertos no dado
     ├── grupo_corrente_temperatura/           esquema sem a tensão de corte
@@ -66,8 +71,8 @@ seguinte; ficam em `tabelas/` como as outras:
 | `preprocessado/tabelas/dados_modelagem.csv` | `limpeza.py` | `descritiva.py`, `normalizar.py`, `classificacao.py`, `regressao.py` |
 | `normalizado/tabelas/dados_normalizados.csv` | `normalizar.py` | `classificacao.py`, `regressao.py` |
 | `normalizado/tabelas/parametros_escala.csv` | `normalizar.py` | `regressao.py` |
-| `curvas/tabelas/features_curvas.csv` | `curvas.py` | `grupos.py`, `capacidade.py`, `modelos_area.py`, `mapa_calor.py`, `classificacao.py` |
-| `cluster/agrupamento/tabelas/grupos_comportamento.csv` | `grupos.py` | `classificacao.py` |
+| `curvas/tabelas/features_curvas.csv` | `curvas.py` | `grupos.py`, `capacidade.py`, `modelos_area.py`, `mapa_calor.py`, `classificacao.py`, `baterias_por_condicao.py` |
+| `cluster/agrupamento/tabelas/grupos_comportamento.csv` | `grupos.py` | `classificacao.py`, `baterias_por_condicao.py` |
 | `cluster/<esquema>/capacidade/tabelas/` e `modelos_area/<área>/tabelas/` | `capacidade.py`, `modelos_area.py` | `comparacao.py` |
 
 ### `main.py`
@@ -1386,6 +1391,120 @@ Em `saida_nasa/regressao/figuras/`, na ordem do artigo:
 | `09_rul_teste_por_algoritmo.png` | o RUL de cada algoritmo nos pares de teste que chegam a 80%, com o oráculo |
 | `10_ensemble.png` | o RMSE do ensemble, dos membros e das referências nas três avaliações, e o SOH estimado pelo ensemble e pelo SVR ajustado no teste |
 | `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 06 de cada algoritmo e do ensemble, com o SOH medido e o estimado em cada par de teste |
+
+
+## `baterias_por_condicao.py`
+
+```bash
+python src/classificacao.py --com-grupo   # a classificação com a variável
+python src/regressao.py --com-grupo       # a regressão com a variável
+python src/baterias_por_condicao.py       # correlação com o SOH e sem × com
+```
+
+A variável `baterias_por_condicao` é o grupo de comportamento de `grupos.py` —
+os 6 grupos de k = 6 mais o dos pares extremos, G1 a G7 — de cada par bateria ×
+condição. É nominal, então entra nos modelos como **sete indicadores**
+(`baterias_por_condicao_G1` a `_G7`), e não como um número que inventaria uma
+ordem. Com `--com-grupo`, `classificacao.py` e `regressao.py` refazem tudo com
+os indicadores nos três conjuntos de atributos e escrevem em
+`saida_nasa/baterias_por_condicao/classificacao/` e `.../regressao/`, com os
+mesmos nomes de tabelas e figuras das pastas originais. No GAM os indicadores
+entram como reta, como o protocolo; a variante pós-hoc da classificação não
+roda, porque o grupo já é atributo. A logística melhorada e os ensembles também
+não rodam: neles o agrupamento não é refeito a cada rodada, e o grupo vazaria na
+validação.
+
+**O agrupamento só vê o treino.** Os grupos de `grupos.py` foram ajustados com
+todas as células, inclusive as de teste. Como atributo, isso deixaria a célula
+avaliada pesar no próprio rótulo. Por isso o agrupamento é refeito por
+`grupos.ajustar()` só com as 25 células de treino, e os pares de teste entram
+no grupo de centroide mais próximo. Na validação ele é refeito a cada rodada
+sem a célula deixada de fora. Os rótulos de cada ajuste são renomeados para os
+de `grupos.py` pelo pareamento de maior concordância. Só com o treino, o
+agrupamento reproduz `grupos.py` nos 32 pares de treino e nos 11 de teste
+(ARI 1,00). Tirar uma célula muda o grupo de 0 dos outros pares em mediana, e
+de até 6.
+
+### Correlação com o SOH
+
+A medida é a **razão de correlação η**, a raiz da fração da variância do SOH
+explicada pela média de cada grupo. É o análogo do |r| de Pearson para uma
+variável sem ordem, calculado na mesma tabela de descargas de
+`correlacao_soh.py`, com o mesmo filtro de qualidade.
+
+| | η | η² | posição entre os 12 |
+|---|---|---|---|
+| `baterias_por_condicao` | 0,411 | 16,9% | 2ª, atrás de `cycle` (\|r\| = 0,416) |
+| `test_condition` (nominal) | 0,409 | 16,8% | 3ª |
+
+O grupo medido explica o SOH tanto quanto a condição nominal, e não mais. Com
+uma média de SOH por par, para não tratar descargas da mesma célula como
+independentes, o teste de Kruskal-Wallis dá p = 0,002. Os grupos de 4 °C e o de
+4 A / 24 °C ficam abaixo da média (correlação ponto-bisserial de −0,21 em G6 e
+−0,16 em G5), e G1 e G3, que pouco degradam no ensaio, ficam acima (+0,26 e
++0,21).
+
+**Não existe correlação intracélula.** A variável é constante dentro de cada
+par, como a temperatura ambiente. Ela diz ao modelo em que regime a célula
+está, não quanto ela degradou dentro dele. E η nunca é menor que o |r| de
+qualquer número atribuído aos grupos, então a comparação com os atributos
+numéricos favorece a variável.
+
+### O que ela muda nos modelos
+
+As mesmas descargas de teste, previstas sem e com a variável, passam pelas
+mesmas 2.000 reamostragens de células. O intervalo é o da diferença, com e sem
+Bonferroni pelos cinco algoritmos de cada tarefa.
+
+| | validação sem → com | teste sem → com | diferença no teste, IC 95% |
+|---|---|---|---|
+| **kNN** | 79,4 → 73,5% | 73,6 → 73,1% | −0,5 (−1,9 a +8,0) |
+| Regressão logística | 67,9 → 62,1% | 84,1 → 82,7% | −1,4 (−4,0 a +1,4) |
+| SVM (RBF) | 79,0 → 74,0% | 80,3 → 84,7% | +4,4 (−0,2 a +7,1) |
+| Random Forest | 73,7 → 72,1% | 76,8 → 78,5% | +1,7 (+0,6 a +4,3) |
+| Gradient Boosting | 76,3 → 76,2% | 83,2 → 80,5% | −2,8 (−6,2 a +2,2) |
+| **GAM** | 6,49 → 14,36 p.p. | 6,88 → 17,97 p.p. | +11,1 (−0,7 a +24,4) |
+| Regressão linear | 11,67 → 18,33 p.p. | 7,29 → 22,78 p.p. | +15,5 (−0,8 a +34,1) |
+| SVR (RBF) | 6,29 → 7,12 p.p. | 6,28 → 8,80 p.p. | +2,5 (0,0 a +4,3) |
+| Random Forest | 4,99 → 5,30 p.p. | 8,45 → 8,41 p.p. | −0,05 (−0,10 a +0,05) |
+| Processo gaussiano | 7,61 → 6,76 p.p. | 8,25 → 7,96 p.p. | −0,3 (−0,9 a +0,6) |
+
+Classificação em acurácia balanceada, regressão em RMSE do SOH. **Na validação
+a variável não ajuda nenhum classificador** e só ajuda o processo gaussiano na
+regressão. No teste, só a melhora do Random Forest na classificação tem
+intervalo que exclui o zero, com e sem Bonferroni, e é de 1,7 p.p.
+
+**O kNN piora porque os indicadores dominam a distância.** Padronizado, o
+indicador de um grupo pequeno vale vários desvios, e o vizinho mais próximo
+passa a ser quase sempre do mesmo grupo. O k escolhido cai de 25 para 3. É o
+mesmo mecanismo que derrubou a variante pós-hoc.
+
+**O GAM e a regressão linear quebram por colinearidade.** No treino os
+indicadores explicam 99,9% da temperatura ambiente, e protocolo e indicadores
+juntos formam uma matriz praticamente singular (número de condição 7×10¹⁴). Os
+termos lineares, que no GAM não têm penalidade, ficam com coeficientes enormes
+que só se cancelam nas combinações de grupo e condição vistas no treino: no
+GAM, a diferença entre G2 e G3 chega a 141 p.p. com o resto fixo. Duas
+combinações do teste não existem no treino: B0028 a 2 A / 24 °C cai em G1, que
+no treino só tem 1 A / 44 °C, e B0039 a 4 A / 24 °C cai em G7, que no treino só
+tem 4 A / 4 °C. Nesses dois pares o RMSE do GAM vai a 66 e 75 p.p., e o da
+regressão linear a 89 e 92. Os outros pares quase não mudam, por isso o
+intervalo da diferença ainda inclui o zero. Árvores, SVR e processo gaussiano
+não extrapolam assim. O RUL herda o erro: o MAE do GAM no teste vai de 17,1
+para 34,2 ciclos.
+
+Em `saida_nasa/baterias_por_condicao/`:
+
+| | |
+|---|---|
+| `correlacao/tabelas/correlacao_soh.csv` | η e η² da variável e da condição nominal, por descarga e por par, e o Kruskal-Wallis por par |
+| `correlacao/tabelas/soh_por_grupo.csv` | pares, descargas, SOH médio, mediana, quantis, fração em fim de vida e correlação ponto-bisserial de cada grupo |
+| `correlacao/tabelas/ranking_vs_soh.csv` | a variável ao lado do \|r\| agrupado dos atributos de `correlacao_soh.py` |
+| `correlacao/figuras/01_soh_por_grupo.png` | o SOH de cada descarga, grupo a grupo, com a média e os quartis |
+| `correlacao/figuras/02_ranking_vs_soh.png` | a força da associação com o SOH, da variável e dos atributos |
+| `comparacao/tabelas/efeito_nos_modelos.csv` | cada algoritmo sem e com a variável, na validação e no teste, com o IC pareado da diferença (com e sem Bonferroni), F1 e AUC ou MAE e R², e o RUL |
+| `comparacao/figuras/01_efeito_nos_modelos.png` | sem → com, por algoritmo, na validação e no teste das duas tarefas |
+| `classificacao/`, `regressao/` | as saídas completas de `--com-grupo`, com as tabelas e figuras de sempre |
 
 
 ## O que os dados exigem cuidado

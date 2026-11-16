@@ -7,9 +7,11 @@ Classificacao de fim de vida com k vizinhos mais proximos (kNN).
     python classificacao.py --k 25             # forca k
     python classificacao.py --sem-referencias  # so o kNN, sem as familias da literatura
     python classificacao.py --sem-graficos     # so as tabelas
+    python classificacao.py --com-grupo        # com baterias_por_condicao entre os atributos
 
 Le saida_nasa/normalizado/tabelas/dados_normalizados.csv e escreve em
 saida_nasa/classificacao/: as tabelas em tabelas/, os graficos em figuras/.
+Com --com-grupo, em saida_nasa/baterias_por_condicao/classificacao/.
 
 **A tarefa.** Cada descarga e rotulada fim de vida (SOH < 80%, o limiar do
 artigo) ou saudavel. As classes ja saem quase equilibradas — 44% de fim de vida
@@ -131,6 +133,17 @@ cada um dividido pelo seu desvio no treino). A forma e os membros saem da
 validacao, em ensemble_composicao.csv. Como a logistica melhorada, veio depois
 de o teste ser visto e roda a parte.
 
+**--com-grupo: o grupo como atributo.** Tudo de novo, com a variavel
+baterias_por_condicao — o grupo de comportamento do modulo 2, em sete
+indicadores — nos tres conjuntos de atributos. O agrupamento so ve as celulas
+de treino, e na validacao e refeito a cada rodada sem a celula deixada de fora
+(baterias_por_condicao.Codificacao). A particao aleatoria, que ja vaza por
+construcao, usa o agrupamento de todas as celulas de treino. A variante
+pos-hoc nao roda: com o grupo entre os atributos, ela deixa de ser a
+alternativa. A logistica melhorada e o ensemble tambem nao: neles o agrupamento
+nao e refeito a cada rodada, e o grupo vazaria na validacao.
+baterias_por_condicao.py poe os dois resultados lado a lado.
+
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
 from __future__ import annotations
@@ -159,6 +172,11 @@ GRUPOS = (RAIZ / "saida_nasa" / "cluster" / "agrupamento" / "tabelas"
           / "grupos_comportamento.csv")
 SAIDA = RAIZ / "saida_nasa" / "classificacao"
 FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
+# --com-grupo troca a pasta de saida e acrescenta esta frase a todo subtitulo.
+SAIDA_COM_GRUPO = RAIZ / "saida_nasa" / "baterias_por_condicao" / "classificacao"
+NOTA_COM_GRUPO = (" Com baterias_por_condicao, o grupo de comportamento do módulo 2, entre os "
+                  "atributos.")
+NOTA = ""
 
 # Paleta categorica validada para daltonismo (modo claro), slots 1..8 em ordem fixa
 PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -468,13 +486,14 @@ def auc(np, y, escore):
     return float(roc_auc_score(y, escore)) if len(np.unique(y)) == 2 else float("nan")
 
 
-def votos_loco(mods, X, y, celulas, ks):
+def votos_loco(mods, X, y, celulas, ks, rodada=None):
     """Fracao de vizinhos em fim de vida para cada k, uma celula de fora por vez.
 
     Os vizinhos de cada rodada sao procurados uma vez so, com o maior k, e o
     voto de cada k sai dos primeiros k da lista ordenada por distancia. Da o
     mesmo resultado que ajustar um KNeighborsClassifier por k, numa fracao do
-    tempo.
+    tempo. `rodada(X, te)`, quando dada, devolve o X da rodada: com --com-grupo,
+    os indicadores do agrupamento refeito sem a celula de fora.
     """
     np = mods["numpy"]
     from sklearn.neighbors import NearestNeighbors
@@ -482,9 +501,10 @@ def votos_loco(mods, X, y, celulas, ks):
     votos = np.zeros((len(y), len(ks)))
     for c in np.unique(celulas):
         te = celulas == c
-        prep = preparo().fit(X[~te])
-        nn = NearestNeighbors(n_neighbors=int(ks.max())).fit(prep.transform(X[~te]))
-        _, idx = nn.kneighbors(prep.transform(X[te]))
+        Xr = X if rodada is None else rodada(X, te)
+        prep = preparo().fit(Xr[~te])
+        nn = NearestNeighbors(n_neighbors=int(ks.max())).fit(prep.transform(Xr[~te]))
+        _, idx = nn.kneighbors(prep.transform(Xr[te]))
         votos[te] = np.cumsum(y[~te][idx], axis=1)[:, ks - 1] / ks
     return votos
 
@@ -537,16 +557,20 @@ def escolher_k(tab, tolerancia):
             for c in tab.columns}
 
 
-def prever_fora(mods, modelo, X, y, grupos):
-    """Cada grupo e previsto por um modelo ajustado sem ele: classe e escore."""
+def prever_fora(mods, modelo, X, y, grupos, rodada=None):
+    """Cada grupo e previsto por um modelo ajustado sem ele: classe e escore.
+
+    `rodada(X, te)`, quando dada, devolve o X da rodada (ver votos_loco).
+    """
     np = mods["numpy"]
     from sklearn.base import clone
     pred, escore = np.zeros_like(y), np.zeros(len(y))
     for g in np.unique(grupos):
         te = grupos == g
-        m = clone(modelo).fit(X[~te], y[~te])
-        pred[te] = m.predict(X[te])
-        escore[te] = pontuar(m, X[te])
+        Xr = X if rodada is None else rodada(X, te)
+        m = clone(modelo).fit(Xr[~te], y[~te])
+        pred[te] = m.predict(Xr[te])
+        escore[te] = pontuar(m, Xr[te])
     return pred, escore
 
 
@@ -613,13 +637,14 @@ def reamostrar(mods, y, preds, celulas, metrica=None):
 # ---------------------------------------------------------------------------
 # as tres etapas
 # ---------------------------------------------------------------------------
-def etapa_k(mods, tr, conj, tolerancia, k_forcado):
+def etapa_k(mods, tr, conj, tolerancia, k_forcado, cod=None):
     """Curva de acuracia contra k em cada conjunto, e o k de cada um."""
     np, pd = mods["numpy"], mods["pandas"]
     y, cel = tr.fim_de_vida.to_numpy(), tr.battery_id.to_numpy()
     tab = {}
     for n, cols in conj.items():
-        v = votos_loco(mods, tr[cols].to_numpy(), y, cel, GRADE_K)
+        v = votos_loco(mods, tr[cols].to_numpy(), y, cel, GRADE_K,
+                       cod.rodada(cols, cel) if cod else None)
         tab[n] = [acuracia_balanceada(np, y, (v[:, j] > 0.5).astype(int))
                   for j in range(len(GRADE_K))]
     tab = pd.DataFrame(tab, index=pd.Index(GRADE_K, name="k"))
@@ -642,8 +667,13 @@ def etapa_k(mods, tr, conj, tolerancia, k_forcado):
     return tab, k_conj
 
 
-def etapa_comparacao(mods, tr, conj, k_conj, refs):
-    """Protocolo, atributos e algoritmo, so nas celulas de treino."""
+def etapa_comparacao(mods, tr, conj, k_conj, refs, cod=None):
+    """Protocolo, atributos e algoritmo, so nas celulas de treino.
+
+    Com `cod` (--com-grupo), so a validacao por celula troca o agrupamento a
+    cada rodada; a particao aleatoria mistura celulas nos dois lados e fica com
+    o agrupamento de todas as de treino.
+    """
     np, pd = mods["numpy"], mods["pandas"]
     y, cel = tr.fim_de_vida.to_numpy(), tr.battery_id.to_numpy()
     aleat = particao_aleatoria(mods, y)
@@ -659,7 +689,8 @@ def etapa_comparacao(mods, tr, conj, k_conj, refs):
             if n == "relativas":
                 esquemas.append(("aleatoria por descarga", aleat))
             for esquema, grupos in esquemas:
-                pred, escore = prever_fora(mods, m, X, y, grupos)
+                rodada = cod.rodada(cols, cel) if cod and grupos is cel else None
+                pred, escore = prever_fora(mods, m, X, y, grupos, rodada)
                 if n == "relativas" and grupos is cel:
                     pred_val[nome] = pred
                 met = metricas(np, y, pred)
@@ -1198,7 +1229,7 @@ def estilo(mods):
 
 def titulo_figura(plt, fig, texto, sub):
     import textwrap
-    linhas = textwrap.wrap(sub, width=int(fig.get_figwidth() * 13.5))
+    linhas = textwrap.wrap(sub + NOTA, width=int(fig.get_figwidth() * 13.5))
     altura_linha = 0.1875 / fig.get_figheight()
     fig.suptitle(texto, fontsize=14, fontweight="bold", color=INK,
                  x=0.007, ha="left", y=0.99)
@@ -1905,18 +1936,32 @@ def main():
     ap.add_argument("--sem-referencias", action="store_true",
                     help="so o kNN, sem as familias dos trabalhos relacionados")
     ap.add_argument("--sem-graficos", action="store_true")
+    ap.add_argument("--com-grupo", action="store_true",
+                    help="com baterias_por_condicao entre os atributos, em "
+                         "saida_nasa/baterias_por_condicao/classificacao/")
     a = ap.parse_args()
 
+    global SAIDA, FIGURAS, TABELAS, NOTA
+    if a.com_grupo:
+        SAIDA, NOTA = SAIDA_COM_GRUPO, NOTA_COM_GRUPO
+        FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
     mods = checar()
     TABELAS.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
-    p("Classificacao de fim de vida com kNN")
+    p("Classificacao de fim de vida com kNN"
+      + (", com baterias_por_condicao" if a.com_grupo else ""))
     p("=" * 60)
     df = carregar(mods)
     conj = conjuntos(df)
     tr = df[df.split == "treino"].reset_index(drop=True)
     te = df[df.split == "teste"].reset_index(drop=True)
+    cod = None
+    if a.com_grupo:
+        from baterias_por_condicao import Codificacao
+        cod = Codificacao(mods, tr, te)
+        cod.relatar(tr, te)
+        conj = {n: cols + cod.colunas for n, cols in conj.items()}
     for nome, d in (("treino", tr), ("teste", te)):
         p(f"  {nome:<6} {len(d):>4} descargas, {d.battery_id.nunique():>2} celulas, "
           f"{d.fim_de_vida.mean():.1%} em fim de vida (SOH < {FIM_DE_VIDA:.0f}%)")
@@ -1925,13 +1970,13 @@ def main():
 
     p("")
     p("1. escolha de k, uma celula de treino de fora por vez:")
-    tab, k_conj = etapa_k(mods, tr, conj, a.tolerancia, a.k)
+    tab, k_conj = etapa_k(mods, tr, conj, a.tolerancia, a.k, cod)
     k = k_conj["relativas"]
 
     p("")
     p("2. protocolo, atributos e algoritmo (so treino):")
     refs = {} if a.sem_referencias else referencias()
-    comp, piv, por_cel, nome_knn = etapa_comparacao(mods, tr, conj, k_conj, refs)
+    comp, piv, por_cel, nome_knn = etapa_comparacao(mods, tr, conj, k_conj, refs, cod)
 
     p("")
     p("3. teste: 8 celulas, avaliadas uma vez:")
@@ -1939,7 +1984,9 @@ def main():
 
     p("")
     variante = None
-    if CURVAS.exists() and GRUPOS.exists():
+    if a.com_grupo:
+        p("4. variante pulada: com --com-grupo o grupo de comportamento ja e atributo")
+    elif CURVAS.exists() and GRUPOS.exists():
         p("4. variante pos-hoc, vizinhos so do mesmo grupo de comportamento (so validacao):")
         variante = etapa_variante(mods, tr, conj, tab, k, a.tolerancia)
         por_cel = por_cel.merge(variante[1].reset_index(), on="battery_id", how="left")
@@ -1949,7 +1996,10 @@ def main():
 
     p("")
     melhorada = None
-    if refs:
+    if a.com_grupo:
+        # Nelas o agrupamento nao e refeito a cada rodada: o grupo vazaria na validacao.
+        p("5 e 6. logistica melhorada e ensemble pulados: --com-grupo")
+    elif refs:
         p("5. logistica melhorada, pos-hoc (C sai so da validacao):")
         melhorada = etapa_logistica(mods, tr, te, conj, a.tolerancia)
         prev = prev.assign(**melhorada[5])

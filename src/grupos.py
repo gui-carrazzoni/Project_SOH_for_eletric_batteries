@@ -604,9 +604,18 @@ def desenhar(mods, plt, perfil, normais, X, info, k, tab, cont, nomes):
            for r in sub.itertuples(index=False)]
     fig, ax = plt.subplots(figsize=(9, max(6, 0.22 * len(sub) + 2)))
     corte = _altura_corte(Z, k, np)
-    dendrogram(Z, labels=rot, orientation="right", ax=ax,
-               color_threshold=corte, above_threshold_color=INK2,
-               leaf_font_size=7.5)
+    # Cada ramo herda a cor do grupo de Ward (a mesma do PCA, figura 05) quando
+    # todas as folhas abaixo dele sao do mesmo grupo; acima do corte, cinza. A
+    # paleta automatica do scipy (color_threshold) nao conhece os rotulos G1..G6
+    # e pintava os mesmos grupos com cores diferentes nas duas figuras.
+    folha = sub.grupo.to_numpy()
+    n = len(folha)
+    membros = {i: {folha[i]} for i in range(n)}
+    for j, (a, b, *_resto) in enumerate(Z):
+        membros[n + j] = membros[int(a)] | membros[int(b)]
+    dendrogram(Z, labels=rot, orientation="right", ax=ax, leaf_font_size=7.5,
+               link_color_func=lambda i: (cor[next(iter(membros[i]))]
+                                          if len(membros[i]) == 1 else INK2))
     ax.axvline(corte, color=INK2, linestyle="--", linewidth=1.2)
     ax.set_xlabel("distancia de ligacao (Ward, espaco do PCA)")
     ax.grid(axis="y", visible=False)
