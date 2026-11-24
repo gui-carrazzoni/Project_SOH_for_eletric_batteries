@@ -93,8 +93,8 @@ discutir os cinco lado a lado, e nao so o kNN.
 **Onde fica cada coisa.** As tabelas vao para saida_nasa/classificacao/tabelas/
 e os graficos para saida_nasa/classificacao/figuras/, numerados na ordem do
 artigo: validacao (01 e 02), teste de todos os algoritmos (03 a 06), os erros do
-kNN ao longo dos ciclos (07) e a variante pos-hoc (08). As imagens por
-algoritmo ficam em figuras/teste_por_modelo/.
+kNN ao longo dos ciclos (07), a variante pos-hoc (08) e a logistica melhorada
+(09 e 10). As imagens por algoritmo ficam em figuras/teste_por_modelo/.
 
 **Variante pos-hoc: vizinhos so do mesmo grupo de comportamento.** Na analise
 dos erros do teste, mais da metade dos vizinhos que enganaram B0018 vinha de
@@ -103,6 +103,20 @@ grupo da descarga, com o agrupamento refeito a cada rodada so com as celulas de
 treino (grupos.ajustar) e a celula de fora encaixada no grupo mais proximo.
 Como surgiu de olhar o teste, so a validacao a avalia. Precisa das saidas de
 curvas.py e grupos.py; sem elas, e pulada.
+
+**Logistica melhorada (pos-hoc).** A mesma regressao logistica, com tres trocas,
+medidas uma a uma em logistica_melhorada.csv: regularizacao mais forte (o C do
+padrao, 1, deixa os coeficientes soltos entre atributos colineares, e os das
+duas tensoes trocam de sinal de uma rodada para outra); a idade no par no lugar
+do ciclo da celula, como em regressao.py, porque o SOH recomeca em 100% quando a
+celula muda de condicao e o ciclo dela nao; e a media movel exponencial dos
+atributos relativos, so com descargas ate a atual, contra o vaivem de um ciclo
+para o seguinte. C sai da validacao, pela regra do k: o menor a ate TOLERANCIA_K
+do maximo. A ideia veio depois de ver o teste, entao o numero do teste dela nao
+e avaliacao independente, e o artigo que a usar tem de declarar isso. Por isso
+ela roda a parte e nao entra nas tabelas e nos graficos dos cinco algoritmos. A
+avaliacao nas 33 celulas, uma de fora por vez, mostra o quanto o resultado
+depende das 8 sorteadas para o teste.
 
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
@@ -154,13 +168,16 @@ COR_CONJUNTO = {"relativas": (PAL[0], "D"), "brutas": (PAL[7], "o"),
                 "todas": (PAL[6], "s")}
 # No terminal e nos CSV os nomes ficam sem acento, como no resto do projeto; o
 # acento volta so nos graficos, que vao para o artigo.
-ROTULO_MODELO = {"Regressao logistica": "Regressão logística"}
+ROTULO_MODELO = {"Regressao logistica": "Regressão logística",
+                 "Regressao logistica melhorada": "Regressão logística melhorada"}
 # Apelido no terminal, onde a tabela por celula tem uma coluna por modelo, e
 # nome das colunas de cada referencia em predicoes_teste.csv.
 CURTO = {"Regressao logistica": "logistica", "SVM (RBF)": "SVM",
          "Random Forest": "RF", "Gradient Boosting": "GB"}
 SLUG = {"Regressao logistica": "regressao_logistica", "SVM (RBF)": "svm",
-        "Random Forest": "random_forest", "Gradient Boosting": "gradient_boosting"}
+        "Random Forest": "random_forest", "Gradient Boosting": "gradient_boosting",
+        "Regressao logistica melhorada": "regressao_logistica_melhorada"}
+LOGISTICA, MELHORADA = "Regressao logistica", "Regressao logistica melhorada"
 # Rampa sequencial do erro: o laranja que marca os erros nos outros graficos, do
 # quase-nada ao escuro, com a luminosidade (OKLCH) caindo a cada passo.
 SEQ_ERRO = ["#f0efec", "#f7d9c9", "#f4b394", "#ef8c5f", "#eb6834", "#bf4a1b", "#86300c"]
@@ -169,6 +186,11 @@ SEQ_ERRO = ["#f0efec", "#f7d9c9", "#f4b394", "#ef8c5f", "#eb6834", "#bf4a1b", "#
 GRADE_K = [1, 3, 5, 7, 9, 11, 15, 21, 25, 31, 41, 51, 61, 81, 101, 151, 201]
 TOLERANCIA_K = 0.01        # acuracia balanceada; com 25 celulas, menos que isso e ruido
 N_VIZINHOS_CSV = 3         # vizinhos listados por previsao em predicoes_teste.csv
+C_PADRAO = 1.0             # o do scikit-learn, o da logistica do artigo
+GRADE_C = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.3, C_PADRAO, 3.0, 10.0]
+# Media movel exponencial da logistica melhorada: alfa = 2 / (JANELA_MEDIA + 1).
+# E a janela da referencia de inicio de vida de normalizar.py; nao foi ajustada.
+JANELA_MEDIA = 5
 FOLDS_ALEATORIOS = 5       # particao vazada, so para medir o vazamento
 N_BOOT = 2000              # reamostragens de celulas para o intervalo do teste
 PERTO_DO_LIMIAR = 5.0      # p.p. de SOH; erro a essa distancia de 80% e fronteira
@@ -228,7 +250,23 @@ def carregar(mods):
     df = df.merge(ciclo.rename(columns={"cycle": "ciclo"}),
                   on=["battery_id", "test_id"], how="left", validate="one_to_one")
     df["fim_de_vida"] = (df[ALVO] < FIM_DE_VIDA).astype(int)
-    return df
+    return suavizar(df)
+
+
+def suavizar(df):
+    """A idade no par e as colunas _suave, que so a logistica melhorada usa.
+
+    A media movel percorre cada par em ordem cronologica e so enxerga as
+    descargas ate a atual. Lacuna de impedancia repete o ultimo valor do par; a
+    que abre o par fica para a imputacao de preparo(). A ordem das linhas nao
+    muda: dela dependem os desempates do kNN e o sorteio do Random Forest.
+    """
+    chave = ["battery_id", "test_condition"]
+    df["ciclo_par"] = df.ciclo - df.groupby(chave).ciclo.transform("min")
+    rel = sorted(c for c in df.columns if c.endswith("_rel"))
+    suave = df.sort_values(chave + ["ciclo"]).groupby(chave)[rel].transform(
+        lambda s: s.ffill().ewm(span=JANELA_MEDIA, min_periods=1).mean())
+    return df.join(suave.add_suffix("_suave"))
 
 
 def conjuntos(df):
@@ -242,6 +280,15 @@ def conjuntos(df):
     brutas = sorted({c[:-4] for c in rel} | set(contexto))
     todos = {"relativas": rel + contexto, "brutas": brutas, "todas": brutas + rel}
     return {n: cols for n, cols in todos.items() if set(cols) <= set(df.columns)}
+
+
+def passos_logistica(conj, c):
+    """Da logistica do artigo a melhorada, uma troca por vez: (passo, colunas, C)."""
+    artigo = conj["relativas"]
+    idade = ["ciclo_par" if x == "cycle" else x for x in artigo]
+    suave = [x + "_suave" if x.endswith("_rel") else x for x in idade]
+    return [("artigo", artigo, C_PADRAO), ("C menor", artigo, c),
+            ("idade no par", idade, c), ("media movel", suave, c)]
 
 
 def condicao(c):
@@ -277,6 +324,12 @@ def knn(k):
     return make_pipeline(preparo(), KNeighborsClassifier(n_neighbors=k))
 
 
+def logistica(c):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    return make_pipeline(preparo(), LogisticRegression(C=c, max_iter=2000))
+
+
 def referencias():
     """As familias dos trabalhos relacionados, com os hiperparametros padrao.
 
@@ -284,11 +337,10 @@ def referencias():
     de 100 iteracoes nao converge.
     """
     from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
-    from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.svm import SVC
     return {
-        "Regressao logistica": make_pipeline(preparo(), LogisticRegression(max_iter=2000)),
+        LOGISTICA: logistica(C_PADRAO),
         "SVM (RBF)": make_pipeline(preparo(), SVC()),
         "Random Forest": make_pipeline(preparo(), RandomForestClassifier(random_state=SEMENTE)),
         "Gradient Boosting": make_pipeline(
@@ -828,6 +880,117 @@ def etapa_variante(mods, tr, conj, tab, k_base, tolerancia):
     return curva, acerto, resumo
 
 
+def escolher_c(serie, tolerancia):
+    """O menor C (mais regularizado) a ate `tolerancia` do maximo, a regra do k."""
+    return float(serie.index[serie >= serie.max() - tolerancia].min())
+
+
+def etapa_logistica(mods, tr, te, conj, tolerancia):
+    """Pos-hoc: a logistica melhorada, uma troca por vez, contra a do artigo.
+
+    C so ve a validacao nas celulas de treino. Cada passo sai na validacao, no
+    teste e nas 33 celulas com uma de fora por vez; a diferenca para a do artigo
+    e pareada nas mesmas reamostragens de celulas.
+    """
+    np, pd = mods["numpy"], mods["pandas"]
+    y_tr, y_te = tr.fim_de_vida.to_numpy(), te.fim_de_vida.to_numpy()
+    cel_tr, cel_te = tr.battery_id.to_numpy(), te.battery_id.to_numpy()
+
+    colunas = {nome: cols for nome, cols, _ in passos_logistica(conj, None)
+               if nome != "C menor"}
+    tab = pd.DataFrame(
+        {nome: [acuracia_balanceada(np, y_tr, prever_fora(
+                    mods, logistica(c), tr[cols].to_numpy(), y_tr, cel_tr)[0])
+                for c in GRADE_C] for nome, cols in colunas.items()},
+        index=pd.Index(GRADE_C, name="C"))
+    c_final = escolher_c(tab["media movel"], tolerancia)
+    p(f"  {'C':>7} " + " ".join(f"{n:>13}" for n in tab.columns))
+    for c, r in tab.iterrows():
+        marca = " *" if c == c_final else ""
+        p(f"  {c:>7g} " + " ".join(f"{v:>13.3f}" for v in r) + marca)
+    p(f"  * C={c_final:g}: o menor a ate {100 * tolerancia:.0f} p.p. do maximo com a media "
+      f"movel, o passo final; a do artigo usa C={C_PADRAO:g}")
+
+    tudo = pd.concat([tr, te], ignore_index=True)
+    y_33, cel_33 = tudo.fim_de_vida.to_numpy(), tudo.battery_id.to_numpy()
+    alvos = {"validacao": (y_tr, cel_tr), "teste": (y_te, cel_te), "33 celulas": (y_33, cel_33)}
+    passos = passos_logistica(conj, c_final)
+    preds, escores, coefs = {a: {} for a in alvos}, {a: {} for a in alvos}, []
+    for nome, cols, c in passos:
+        modelo = logistica(c)
+        X = tr[cols].to_numpy()
+        preds["validacao"][nome], escores["validacao"][nome] = prever_fora(
+            mods, modelo, X, y_tr, cel_tr)
+        preds["33 celulas"][nome], escores["33 celulas"][nome] = prever_fora(
+            mods, modelo, tudo[cols].to_numpy(), y_33, cel_33)
+        final = logistica(c).fit(X, y_tr)
+        preds["teste"][nome] = final.predict(te[cols].to_numpy())
+        escores["teste"][nome] = pontuar(final, te[cols].to_numpy())
+        if nome in ("artigo", "media movel"):
+            # O quanto cada coeficiente se mexe quando uma celula sai do treino.
+            rodadas = np.array([logistica(c).fit(X[cel_tr != b], y_tr[cel_tr != b])[-1].coef_[0]
+                                for b in np.unique(cel_tr)])
+            coefs.append(pd.DataFrame({
+                "modelo": LOGISTICA if nome == "artigo" else MELHORADA, "atributo": cols,
+                "coeficiente": final[-1].coef_[0], "minimo_rodadas": rodadas.min(axis=0),
+                "maximo_rodadas": rodadas.max(axis=0)}))
+
+    linhas = []
+    for alvo, (y, cel) in alvos.items():
+        amostras = reamostrar(mods, y, preds[alvo], cel)
+        base = acuracia_balanceada(np, y, preds[alvo]["artigo"])
+        for nome, cols, c in passos:
+            m = metricas(np, y, preds[alvo][nome])
+            lin = {"passo": nome, "C": c, "avaliacao": alvo, **m,
+                   "auc": auc(np, y, escores[alvo][nome])}
+            lin["ic95_inferior"], lin["ic95_superior"] = np.percentile(
+                amostras[nome], [2.5, 97.5])
+            if nome != "artigo":
+                lin["diferenca_para_artigo"] = m["acuracia_balanceada"] - base
+                lin["dif_ic95_inferior"], lin["dif_ic95_superior"] = np.percentile(
+                    amostras[nome] - amostras["artigo"], [2.5, 97.5])
+            linhas.append(lin)
+    res = pd.DataFrame(linhas)
+
+    piv = res.pivot(index="passo", columns="avaliacao", values="acuracia_balanceada")
+    p("")
+    p(f"  {'acuracia balanceada':<20} " + " ".join(f"{a:>11}" for a in alvos))
+    for nome, _cols, c in passos:
+        p(f"  {nome:<14} C={c:<4g} " + " ".join(f"{piv.loc[nome, a]:>11.3f}" for a in alvos))
+    p("  cada linha mantem as trocas das anteriores; 33 celulas: treino e teste juntos,")
+    p("  uma celula de fora por vez, com o C que saiu so do treino")
+    p("")
+    for r in res[res.passo == "media movel"].itertuples(index=False):
+        exclui = "exclui" if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0 else "inclui"
+        p(f"  {r.avaliacao:<11} sensib. {r.sensibilidade:.3f}, especif. {r.especificidade:.3f}, "
+          f"F1 {r.f1_fim_de_vida:.3f}, AUC {r.auc:.3f}; diferenca para a do artigo "
+          f"{100 * r.diferenca_para_artigo:+.1f} p.p. IC 95% [{100 * r.dif_ic95_inferior:+.1f}, "
+          f"{100 * r.dif_ic95_superior:+.1f}] {exclui} o zero")
+
+    prev = {f"previsto_{SLUG[MELHORADA]}": preds["teste"]["media movel"],
+            f"escore_{SLUG[MELHORADA]}": escores["teste"]["media movel"]}
+    por = []
+    for nome, modelo in (("artigo", LOGISTICA), ("media movel", MELHORADA)):
+        pr = preds["teste"][nome]
+        t = (te[["battery_id", "test_condition", "fim_de_vida"]]
+             .assign(acerto=pr == y_te, alarme_falso=(pr == 1) & (y_te == 0),
+                     nao_detectado=(pr == 0) & (y_te == 1))
+             .groupby(["battery_id", "test_condition"])
+             .agg(descargas=("acerto", "size"), fim_de_vida_real=("fim_de_vida", "sum"),
+                  acuracia=("acerto", "mean"), alarmes_falsos=("alarme_falso", "sum"),
+                  nao_detectados=("nao_detectado", "sum"))
+             .reset_index())
+        t.insert(0, "modelo", modelo)
+        por.append(t)
+    por = pd.concat(por, ignore_index=True)
+    p("")
+    p("  acerto por celula de teste, artigo -> melhorada:")
+    ac = por.pivot(index=["battery_id", "test_condition"], columns="modelo", values="acuracia")
+    for (b, cond), r in ac.iterrows():
+        p(f"    {b} {cond:<11} {r[LOGISTICA]:>5.0%} -> {r[MELHORADA]:>4.0%}")
+    return tab, c_final, res, pd.concat(coefs, ignore_index=True), por, prev
+
+
 # ---------------------------------------------------------------------------
 # graficos
 # ---------------------------------------------------------------------------
@@ -1158,6 +1321,110 @@ def fig_variante(mods, plt, curva, resumo):
     salvar(plt, fig, "08_variante_mesmo_grupo.png")
 
 
+ROTULO_PASSO = {"artigo": "a do artigo", "C menor": "+ regularização mais forte",
+                "idade no par": "+ idade no par", "media movel": "+ média móvel causal"}
+
+
+def fig_escolha_c(mods, plt, tab, c_final):
+    from matplotlib.ticker import FuncFormatter, NullLocator
+    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    # Azul, violeta e laranja passam o validador de daltonismo em todos os pares, e
+    # a forma repete a distincao para impressao em preto e branco.
+    series = (("artigo", "atributos da logística do artigo", PAL[0], "D"),
+              ("idade no par", "com a idade no par", PAL[6], "s"),
+              ("media movel", "com a idade no par e a média móvel", PAL[1], "o"))
+    for col, rotulo, cor, mk in series:
+        ax.plot(tab.index, 100 * tab[col], color=cor, marker=mk, markersize=6.5,
+                markeredgecolor=SURF, markeredgewidth=1.4, label=rotulo, zorder=3)
+    for c, col, texto, desloc in ((C_PADRAO, "artigo", "a do artigo", (4, -16)),
+                                  (c_final, "media movel", "a melhorada", (8, 7))):
+        v = 100 * tab.loc[c, col]
+        ax.annotate(f"{texto}: {virg(v)}%", (c, v), xytext=desloc,
+                    textcoords="offset points", fontsize=9.5, color=INK)
+    ax.axvline(c_final, color=INK2, linestyle="--", linewidth=1.2, zorder=1)
+    ax.set_xscale("log")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}".replace(".", ",")))
+    ax.set_xticks([1e-4, 1e-3, 1e-2, 0.1, 1, 10])
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.set_ylim(50, 85)
+    ax.set_xlabel("C, inverso da regularização (escala log; à esquerda, mais regularizado)")
+    ax.set_ylabel("acurácia balanceada (%)")
+    ax.legend(fontsize=9, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3,
+              borderaxespad=0.4)
+    melhor = (tab["media movel"] >= tab["artigo"]).sum()
+    sub = ("Validação nas 25 células de treino, deixando uma de fora por vez. Vence o menor C a "
+           f"até {virg(100 * TOLERANCIA_K, 0)} p.p. do melhor, a regra do k do kNN: "
+           f"C\u00a0=\u00a0{f'{c_final:g}'.replace('.', ',')}. Com as duas trocas de atributos a curva fica "
+           f"acima da do artigo em {melhor} dos {len(tab)} valores de C.")
+    titulo_figura(plt, fig, "Quanto regularizar a regressão logística", sub)
+    salvar(plt, fig, "09_logistica_escolha_de_c.png")
+
+
+def fig_logistica(mods, plt, res):
+    """Cada troca nas tres avaliacoes, e a matriz de confusao do teste antes e depois."""
+    np = mods["numpy"]
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
+    piv = res.pivot(index="passo", columns="avaliacao", values="acuracia_balanceada")
+    passos = list(ROTULO_PASSO)
+    ys = np.arange(len(passos))[::-1]
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5.6),
+                             gridspec_kw={"width_ratios": [2.1, 1, 1]})
+    ax = axes[0]
+    # O rotulo da validacao vai embaixo do marcador: o das 33 celulas fica colado nele.
+    marcas = (("validacao", "validação (25 células)", -0.17, "top",
+               dict(marker="o", markersize=8, markerfacecolor=SURF, markeredgecolor=INK2,
+                    markeredgewidth=1.6)),
+              ("33 celulas", "as 33 células", 0.17, "bottom",
+               dict(marker="s", markersize=8, markerfacecolor=PAL[1], markeredgecolor=SURF,
+                    markeredgewidth=1.4)),
+              ("teste", "teste (8 células)", 0.17, "bottom",
+               dict(marker="D", markersize=8.5, markerfacecolor=PAL[0], markeredgecolor=SURF,
+                    markeredgewidth=1.4)))
+    for alvo, rotulo, dy, va, marca in marcas:
+        v = 100 * piv.loc[passos, alvo].to_numpy()
+        ax.plot(v, ys, linestyle="-", color=GRID, linewidth=1.6, zorder=1)
+        ax.plot(v, ys, linestyle="", zorder=3, label=rotulo, **marca)
+        for x, y in zip(v, ys):
+            ax.text(x, y + dy, virg(x), fontsize=9, color=INK2, ha="center", va=va)
+    ax.set_yticks(ys, [ROTULO_PASSO[n] for n in passos])
+    ax.set_ylim(-0.5, len(passos) - 0.4)
+    ax.set_xlim(65, 91)
+    ax.set_xlabel("acurácia balanceada (%)")
+    ax.grid(axis="y", visible=False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.legend(fontsize=9, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3,
+              borderaxespad=0.4, handletextpad=0.2, columnspacing=1.2)
+
+    t = res[res.avaliacao == "teste"].set_index("passo")
+    for j, (nome, titulo) in enumerate((("artigo", "a do artigo, no teste"),
+                                        ("media movel", "a melhorada, no teste"))):
+        _matriz(np, axes[j + 1], t.loc[nome], cmap, j == 0)
+        axes[j + 1].set_title(titulo, fontsize=11, color=INK, pad=10)
+    fim = res[res.passo == "media movel"].set_index("avaliacao")
+    ic = lambda a: (f"{sinal(100 * fim.diferenca_para_artigo[a])}\u00a0p.p. "
+                    f"({sinal(100 * fim.dif_ic95_inferior[a])} a "
+                    f"{sinal(100 * fim.dif_ic95_superior[a])})")
+    sub = ("À esquerda, cada linha mantém as trocas das anteriores; na validação e nas 33 células, "
+           "uma célula fica de fora por vez. Diferença da melhorada para a "
+           f"do artigo, com o intervalo de 95% pareado por células: {ic('33 celulas')} nas 33 "
+           f"células e {ic('teste')} no teste. À direita, as linhas são a classe real, as colunas "
+           "a prevista, e o percentual é sobre a classe real. As trocas foram feitas depois de o "
+           "teste ser visto: o número do teste não é avaliação independente.")
+    titulo_figura(plt, fig, "A regressão logística melhorada, troca por troca", sub)
+    salvar(plt, fig, "10_logistica_melhorada.png")
+
+
+def fig_celulas_logistica(mods, plt, prev):
+    acerto = (prev[f"previsto_{SLUG[MELHORADA]}"] == prev.fim_de_vida).to_numpy()
+    fig = _grade_celulas(plt, prev, acerto, "classificada errado")
+    sub = ("Cada painel é uma célula de teste numa condição de ensaio, com a logística melhorada "
+           "ajustada nas 25 células de treino. " + _frase_erros(prev, acerto))
+    titulo_figura(plt, fig, f"{ROTULO_MODELO[MELHORADA]}: erros em cada célula de teste", sub)
+    salvar(plt, fig, f"teste_por_modelo/{SLUG[MELHORADA]}_por_celula.png")
+
+
 # ---------------------------------------------------------------------------
 # graficos por algoritmo: as referencias com o mesmo detalhe do kNN
 # ---------------------------------------------------------------------------
@@ -1178,6 +1445,31 @@ def lista(itens):
     return itens[0] if len(itens) == 1 else ", ".join(itens[:-1]) + " e " + itens[-1]
 
 
+def _matriz(np, ax, r, cmap, rotulos_y):
+    """Uma matriz de confusao: contagem e fracao da classe real em cada casa."""
+    rotulos = ["saudável", "fim de vida"]
+    m = np.array([[r.vn, r.fp], [r.fn, r.vp]], dtype=float)
+    frac = m / m.sum(axis=1, keepdims=True)
+    ax.imshow(frac, cmap=cmap, vmin=0, vmax=1)
+    for a in range(2):
+        for b in range(2):
+            ax.text(b, a, f"{int(m[a, b])}\n{virg(100 * frac[a, b], 0)}%",
+                    ha="center", va="center", fontsize=10.5,
+                    color=_tinta(cmap(frac[a, b])),
+                    fontweight="bold" if a == b else "normal", linespacing=1.3)
+    ax.set_xticks([0, 1], rotulos, fontsize=9)
+    ax.set_yticks([0, 1], rotulos if rotulos_y else ["", ""], fontsize=9)
+    ax.set_xticks([0.5], minor=True)
+    ax.set_yticks([0.5], minor=True)
+    ax.grid(which="minor", color=SURF, linewidth=3)
+    ax.grid(which="major", visible=False)
+    ax.tick_params(which="both", length=0)
+    for lado in ax.spines.values():
+        lado.set_visible(False)
+    ax.set_xlabel(f"acurácia balanceada {virg(100 * r.acuracia_balanceada)}%",
+                  fontsize=9.5, color=INK, labelpad=7)
+
+
 def fig_matrizes(mods, plt, comp, res, ordem):
     """A matriz de confusao de cada algoritmo, na validacao e no teste."""
     np = mods["numpy"]
@@ -1188,30 +1480,10 @@ def fig_matrizes(mods, plt, comp, res, ordem):
               ("teste", res.set_index("modelo").loc[ordem]))
     n = len(ordem)
     fig, axes = plt.subplots(2, n, figsize=(2.45 * n + 1.2, 8.0), squeeze=False)
-    rotulos = ["saudável", "fim de vida"]
     for i, (etapa, t) in enumerate(etapas):
         for j, nome in enumerate(ordem):
-            ax, r = axes[i, j], t.loc[nome]
-            m = np.array([[r.vn, r.fp], [r.fn, r.vp]], dtype=float)
-            frac = m / m.sum(axis=1, keepdims=True)
-            ax.imshow(frac, cmap=cmap, vmin=0, vmax=1)
-            for a in range(2):
-                for b in range(2):
-                    ax.text(b, a, f"{int(m[a, b])}\n{virg(100 * frac[a, b], 0)}%",
-                            ha="center", va="center", fontsize=10.5,
-                            color=_tinta(cmap(frac[a, b])),
-                            fontweight="bold" if a == b else "normal", linespacing=1.3)
-            ax.set_xticks([0, 1], rotulos, fontsize=9)
-            ax.set_yticks([0, 1], rotulos if j == 0 else ["", ""], fontsize=9)
-            ax.set_xticks([0.5], minor=True)
-            ax.set_yticks([0.5], minor=True)
-            ax.grid(which="minor", color=SURF, linewidth=3)
-            ax.grid(which="major", visible=False)
-            ax.tick_params(which="both", length=0)
-            for lado in ax.spines.values():
-                lado.set_visible(False)
-            ax.set_xlabel(f"acurácia balanceada {virg(100 * r.acuracia_balanceada)}%",
-                          fontsize=9.5, color=INK, labelpad=7)
+            ax = axes[i, j]
+            _matriz(np, ax, t.loc[nome], cmap, j == 0)
             if i == 0:
                 ax.set_title(ROTULO_MODELO.get(nome, nome), fontsize=11, color=INK, pad=10,
                              fontweight="bold" if nome == nome_knn else "normal")
@@ -1447,15 +1719,30 @@ def main():
         p("4. variante pulada: falta o agrupamento. Rode antes: python src/curvas.py "
           "e python src/grupos.py")
 
+    p("")
+    melhorada = None
+    if refs:
+        p("5. logistica melhorada, pos-hoc (C sai so da validacao):")
+        melhorada = etapa_logistica(mods, tr, te, conj, a.tolerancia)
+        prev = prev.assign(**melhorada[5])
+    else:
+        p("5. logistica melhorada pulada: --sem-referencias")
+
     arquivos = {"escolha_de_k.csv": tab, "comparacao.csv": comp,
                 "validacao_por_celula.csv": por_cel, "teste.csv": res,
                 "teste_por_celula.csv": por, "predicoes_teste.csv": prev}
     if variante:
         arquivos["variante_mesmo_grupo.csv"] = variante[0]
+    if melhorada:
+        arquivos.update({"logistica_escolha_de_c.csv": melhorada[0],
+                         "logistica_melhorada.csv": melhorada[2],
+                         "logistica_coeficientes.csv": melhorada[3],
+                         "logistica_por_celula.csv": melhorada[4]})
     p("")
     for nome, tabela in arquivos.items():
         tabela.round(4).to_csv(TABELAS / nome, index=nome in ("escolha_de_k.csv",
-                                                              "variante_mesmo_grupo.csv"))
+                                                              "variante_mesmo_grupo.csv",
+                                                              "logistica_escolha_de_c.csv"))
         p(f"  {(TABELAS / nome).relative_to(RAIZ)}")
 
     if not a.sem_graficos:
@@ -1463,8 +1750,8 @@ def main():
         p("graficos:")
         plt = estilo(mods)
         # Na ordem do artigo: validacao, teste de todos os algoritmos, o kNN em
-        # detalhe e a variante pos-hoc. Sem referencias, os graficos por
-        # algoritmo saem so com o kNN.
+        # detalhe, a variante pos-hoc e a logistica melhorada. Sem referencias, os
+        # graficos por algoritmo saem so com o kNN.
         ordem = ordem_modelos(piv, nome_knn)
         fig_escolha_k(mods, plt, tab, k, a.tolerancia)
         fig_hierarquia(mods, plt, piv, nome_knn)
@@ -1476,6 +1763,10 @@ def main():
         fig_celulas_por_modelo(mods, plt, prev, ordem)
         if variante:
             fig_variante(mods, plt, variante[0], variante[2])
+        if melhorada:
+            fig_escolha_c(mods, plt, melhorada[0], melhorada[1])
+            fig_logistica(mods, plt, melhorada[2])
+            fig_celulas_logistica(mods, plt, prev)
     p("")
     p(f"  tempo total: {time.time() - t0:.0f}s")
 

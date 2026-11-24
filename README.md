@@ -883,6 +883,52 @@ rótulo dela, que é o artificial.
 
 A variante não entra no modelo e não foi avaliada no teste.
 
+### Regressão logística melhorada (pós-hoc)
+
+A mesma regressão logística, com os mesmos 11 sinais e o mesmo protocolo, e três
+trocas. Roda como etapa à parte e não entra nas tabelas e nos gráficos dos cinco
+algoritmos, que continuam os do artigo.
+
+1. **Regularização mais forte: C = 0,01 no lugar de 1.** Com o padrão do
+   scikit-learn os coeficientes ficam soltos entre atributos colineares (as duas
+   tensões têm r = 0,96): o de `voltage_load_rel` vai de −0,63 a +0,25 entre as
+   25 rodadas da validação. Com C = 0,01, de −0,54 a −0,38
+   (`logistica_coeficientes.csv`). C sai só da validação, pela regra do k: o
+   menor a até 1 p.p. do máximo. O pico é estreito — 77,3% em 0,003, 79,1% em
+   0,01, 77,4% em 0,03 (`09_logistica_escolha_de_c.png`).
+2. **Idade no par no lugar do ciclo da célula**, como em `regressao.py`: o SOH
+   recomeça em 100% quando a célula muda de condição, e o ciclo dela não.
+3. **Média móvel exponencial dos atributos relativos**, só com descargas até a
+   atual (α = 1/3, a janela de 5 da referência de início de vida; não foi
+   ajustada), contra o vaivém de um ciclo para o seguinte.
+
+| acurácia balanceada | validação | teste | 33 células |
+|---|---|---|---|
+| a do artigo | 67,9% | 84,1% | 73,0% |
+| + C = 0,01 | 73,1% | 83,2% | 75,1% |
+| + idade no par | 77,0% | 86,5% | 77,6% |
+| **+ média móvel causal** | **79,1%** | **87,6%** | **79,6%** |
+| diferença para a do artigo (IC 95% pareado) | +11,2 (+0,2 a +20,9) | +3,5 (−0,0 a +6,1) | +6,6 (+2,5 a +10,6) |
+
+A coluna das 33 células junta treino e teste e deixa uma célula de fora por vez,
+com o C que saiu só do treino. Ela mostra o quanto o 84,1% dependia das 8 células
+sorteadas: nas 33, a logística do artigo fica em 73,0%.
+
+| teste | sensibilidade | especificidade | F1 | AUC | não detectado (FN) | alarme falso (FP) |
+|---|---|---|---|---|---|---|
+| a do artigo | 90,6% | 77,5% | 0,840 | 0,870 | 32 | 85 |
+| **melhorada** | 89,4% | 85,7% | 0,871 | 0,916 | 36 | 54 |
+
+Ela troca 4 detecções por 31 alarmes falsos a menos. Nenhum par de teste piora em
+acerto; o que mais melhora é B0042 a 1 A / 4 °C, de 20% para 76%, o par
+renormalizado no ciclo 87, em que o ciclo da célula fazia uma bateria de SOH
+entre 88% e 100% parecer velha. O custo fica em B0042 a 4 A / 4 °C, que passa de
+6 para 11 fins de vida não detectados (e de 18 para 12 alarmes falsos).
+
+**O número do teste não é avaliação independente.** As trocas vieram depois de o
+teste ser visto, e foram escolhidas na validação entre cerca de 300 combinações
+de modelo e atributos. O artigo que a usar tem de declarar isso.
+
 **Cuidados:**
 
 - **Ajustar o kNN agora contamina o teste.** Peso por distância ou limiar de voto
@@ -907,9 +953,13 @@ Em `saida_nasa/classificacao/tabelas/`:
 | `comparacao.csv` | modelo × atributos × validação (por célula e aleatória): acurácia balanceada, sensibilidade, especificidade, F1, AUC, precisão, acurácia, a matriz de confusão (VP, FN, FP, VN) e o k do kNN |
 | `validacao_por_celula.csv` | o acerto de cada algoritmo em cada célula de treino, quando ela é a deixada de fora, e o do kNN com a restrição ao grupo |
 | `variante_mesmo_grupo.csv` | acurácia balanceada por k, com e sem a restrição ao grupo de comportamento |
+| `logistica_escolha_de_c.csv` | acurácia balanceada por C, com os atributos do artigo, com a idade no par e com a média móvel |
+| `logistica_melhorada.csv` | cada troca da logística na validação, no teste e nas 33 células: métricas, matriz de confusão, IC e diferença pareada para a do artigo |
+| `logistica_coeficientes.csv` | os coeficientes da logística do artigo e da melhorada, com o mínimo e o máximo entre as 25 rodadas |
+| `logistica_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula de teste, antes e depois |
 | `teste.csv` | métricas no teste, com a matriz de confusão, IC por reamostragem de células de todas elas e diferença pareada para o kNN em acurácia balanceada, AUC e F1, com e sem Bonferroni |
 | `teste_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula, de cada algoritmo |
-| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram, e a classe e o escore de cada referência |
+| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram, e a classe e o escore de cada referência e da logística melhorada |
 
 Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
 
@@ -923,7 +973,9 @@ Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
 | `06_erro_por_celula.png` | a fração de erro de cada algoritmo em cada célula de teste, com os alarmes falsos e os fins de vida não detectados |
 | `07_teste_por_celula.png` | SOH contra ciclo em cada célula de teste, com os erros do kNN marcados |
 | `08_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
-| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 07 de cada algoritmo, com os erros dele em cada célula de teste |
+| `09_logistica_escolha_de_c.png` | a curva de C da logística, com os atributos do artigo e os da melhorada |
+| `10_logistica_melhorada.png` | cada troca da logística melhorada nas três avaliações, e a matriz de confusão do teste antes e depois |
+| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 07 de cada algoritmo e da logística melhorada, com os erros em cada célula de teste |
 
 ## `regressao.py`
 
