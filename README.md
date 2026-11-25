@@ -1410,9 +1410,9 @@ os indicadores nos três conjuntos de atributos e escrevem em
 `saida_nasa/baterias_por_condicao/classificacao/` e `.../regressao/`, com os
 mesmos nomes de tabelas e figuras das pastas originais. No GAM os indicadores
 entram como reta, como o protocolo; a variante pós-hoc da classificação não
-roda, porque o grupo já é atributo. A logística melhorada e os ensembles também
-não rodam: neles o agrupamento não é refeito a cada rodada, e o grupo vazaria na
-validação.
+roda, porque o grupo já é atributo. Os modelos ajustados (a logística melhorada,
+o SVR ajustado, os Gradient Boosting monotônicos e os dois ensembles) rodam numa
+etapa à parte, descrita abaixo, que exige a execução sem o grupo antes.
 
 **O agrupamento só vê o treino.** Os grupos de `grupos.py` foram ajustados com
 todas as células, inclusive as de teste. Como atributo, isso deixaria a célula
@@ -1493,6 +1493,33 @@ intervalo da diferença ainda inclui o zero. Árvores, SVR e processo gaussiano
 não extrapolam assim. O RUL herda o erro: o MAE do GAM no teste vai de 17,1
 para 34,2 ciclos.
 
+### Os modelos ajustados, sem e com a variável
+
+Com `--com-grupo`, a logística melhorada, o SVR ajustado, os membros e os dois
+ensembles rodam **na configuração que já saiu da execução sem o grupo**, lida de
+`saida_nasa/classificacao/tabelas/` e `saida_nasa/regressao/tabelas/`: C = 0,01
+na logística, ensemble de três membros por voto majoritário, C = 10 no SVR e
+ensemble de regressão com o SVR e o Gradient Boosting monotônico. Nada é
+reescolhido, para que a comparação meça só o efeito da variável sobre os
+modelos que o artigo apresenta. Em cada rodada da validação o agrupamento é
+refeito sem a célula de fora, como nos demais modelos. O resultado vai para
+`classificacao/tabelas/ajustados.csv` e `regressao/tabelas/ajustados.csv`.
+
+| | validação sem → com | teste sem → com | diferença no teste, IC 95% |
+|---|---|---|---|
+| Logística melhorada | 79,1 → 72,7% | 87,6 → 86,2% | −1,4 (−3,5 a +0,2) |
+| SVM suavizado | 79,2 → 76,2% | 81,5 → 84,2% | +2,7 (−2,8 a +5,5) |
+| GB monotônico | 82,1 → 79,8% | 85,8 → 84,3% | −1,5 (−8,0 a +1,1) |
+| **Ensemble** | 82,1 → 75,1% | 88,4 → 89,3% | +0,9 (−3,1 a +3,4) |
+| SVR ajustado | 5,69 → 5,28 p.p. | 5,71 → 8,53 p.p. | +2,82 (+0,03 a +4,89) |
+| GB monotônico | 5,05 → 5,33 p.p. | 6,84 → 6,74 p.p. | −0,10 (−0,17 a +0,01) |
+| **Ensemble** | 4,99 → 5,10 p.p. | 6,06 → 7,41 p.p. | +1,35 (+0,00 a +2,34) |
+
+A conclusão é a mesma dos modelos de base: na validação, a variável piora todos
+os classificadores e só o SVR na regressão melhora, com intervalo que inclui o
+zero. No teste, a alta do ensemble de classificação inclui o zero, e o SVR e o
+ensemble de regressão pioram com intervalos que excluem o zero.
+
 Em `saida_nasa/baterias_por_condicao/`:
 
 | | |
@@ -1505,6 +1532,7 @@ Em `saida_nasa/baterias_por_condicao/`:
 | `comparacao/tabelas/efeito_nos_modelos.csv` | cada algoritmo sem e com a variável, na validação e no teste, com o IC pareado da diferença (com e sem Bonferroni), F1 e AUC ou MAE e R², e o RUL |
 | `comparacao/figuras/01_efeito_nos_modelos.png` | sem → com, por algoritmo, na validação e no teste das duas tarefas |
 | `classificacao/`, `regressao/` | as saídas completas de `--com-grupo`, com as tabelas e figuras de sempre |
+| `classificacao/tabelas/ajustados.csv`, `regressao/tabelas/ajustados.csv` | os modelos ajustados sem e com a variável, na validação e no teste, com o IC pareado da diferença |
 
 
 ## O que os dados exigem cuidado

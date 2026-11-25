@@ -140,8 +140,11 @@ de treino, e na validacao e refeito a cada rodada sem a celula deixada de fora
 (baterias_por_condicao.Codificacao). A particao aleatoria, que ja vaza por
 construcao, usa o agrupamento de todas as celulas de treino. A variante
 pos-hoc nao roda: com o grupo entre os atributos, ela deixa de ser a
-alternativa. A logistica melhorada e o ensemble tambem nao: neles o agrupamento
-nao e refeito a cada rodada, e o grupo vazaria na validacao.
+alternativa. A logistica melhorada e o ensemble rodam com a configuracao que
+ja sairam da execucao sem o grupo — o C da logistica, a composicao e o voto do
+ensemble, lidos de saida_nasa/classificacao/tabelas/ — e nada e reajustado: cada
+um e avaliado sem e com o grupo, com o agrupamento refeito a cada rodada da
+validacao, em ajustados.csv. Por isso a execucao sem o grupo tem de vir antes.
 baterias_por_condicao.py poe os dois resultados lado a lado.
 
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
@@ -174,6 +177,8 @@ SAIDA = RAIZ / "saida_nasa" / "classificacao"
 FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 # --com-grupo troca a pasta de saida e acrescenta esta frase a todo subtitulo.
 SAIDA_COM_GRUPO = RAIZ / "saida_nasa" / "baterias_por_condicao" / "classificacao"
+# Onde --com-grupo le a configuracao da logistica melhorada e do ensemble.
+TABELAS_SEM_GRUPO = TABELAS
 NOTA_COM_GRUPO = (" Com baterias_por_condicao, o grupo de comportamento do módulo 2, entre os "
                   "atributos.")
 NOTA = ""
@@ -1209,6 +1214,79 @@ def etapa_ensemble(mods, tr, te, conj, c, refs):
     return comp.drop(columns="quais"), res, por, prev, tipo, escolhidos
 
 
+def config_ajustados():
+    """C da logistica melhorada, membros e voto do ensemble, da execucao sem o grupo.
+
+    --com-grupo nao reescolhe nada disso: mede o efeito do grupo sobre os modelos
+    que ja foram escolhidos, e nao sobre outros.
+    """
+    import pandas as pd
+    arquivos = [TABELAS_SEM_GRUPO / n for n in ("logistica_melhorada.csv",
+                                                 "ensemble_composicao.csv")]
+    for f in arquivos:
+        if not f.exists():
+            p(f"ERRO: {f.relative_to(RAIZ)} nao existe.")
+            p("    Rode antes, sem o grupo: python src/classificacao.py")
+            sys.exit(1)
+    lm, comp = (pd.read_csv(f) for f in arquivos)
+    c = float(lm.loc[lm.passo == "media movel", "C"].iloc[0])
+    return c, comp.membros.iloc[0].split(" + "), comp.voto.iloc[0]
+
+
+def etapa_ajustados_com_grupo(mods, tr, te, conj, cod):
+    """--com-grupo: a logistica melhorada, os membros e o ensemble, sem e com o grupo.
+
+    `conj` e o conjunto sem o grupo. A configuracao vem de config_ajustados(); a
+    unica diferenca entre as duas versoes sao os indicadores do grupo. Na
+    validacao eles vem do agrupamento refeito sem a celula de fora (cod.rodada),
+    e a diferenca entre as versoes e pareada nas mesmas reamostragens de celulas.
+    """
+    np, pd = mods["numpy"], mods["pandas"]
+    from sklearn.base import clone
+    c, escolhidos, tipo = config_ajustados()
+    p(f"  configuracao da execucao sem o grupo: C = {c:g}; ensemble "
+      f"{' + '.join(escolhidos)}, voto {tipo}")
+    suaves = passos_logistica(conj, c)[-1][1]
+    y_tr, y_te = tr.fim_de_vida.to_numpy(), te.fim_de_vida.to_numpy()
+    cel_tr, cel_te = tr.battery_id.to_numpy(), te.battery_id.to_numpy()
+
+    def modelos(cols):
+        membros = membros_ensemble(cols, c)
+        return {**membros, ENSEMBLE: Voto([membros[n] for n in escolhidos], tipo)}
+
+    preds = {"validacao": {}, "teste": {}}
+    for versao, cols in (("sem", suaves), ("com", suaves + cod.colunas)):
+        rodada = cod.rodada(cols, cel_tr) if versao == "com" else None
+        Xtr, Xte = tr[cols].to_numpy(), te[cols].to_numpy()
+        for nome, m in modelos(cols).items():
+            preds["validacao"][(nome, versao)] = prever_fora(mods, m, Xtr, y_tr, cel_tr,
+                                                             rodada)[0]
+            preds["teste"][(nome, versao)] = clone(m).fit(Xtr, y_tr).predict(Xte)
+
+    linhas = []
+    for alvo, (y, cel) in {"validacao": (y_tr, cel_tr), "teste": (y_te, cel_te)}.items():
+        am = reamostrar(mods, y, preds[alvo], cel)
+        for nome in modelos(suaves):
+            sem, com = (metricas(np, y, preds[alvo][(nome, v)]) for v in ("sem", "com"))
+            lo, hi = np.percentile(am[(nome, "com")] - am[(nome, "sem")], [2.5, 97.5])
+            linhas.append({"modelo": nome, "avaliacao": alvo,
+                           "sem": sem["acuracia_balanceada"], "com": com["acuracia_balanceada"],
+                           "diferenca": com["acuracia_balanceada"] - sem["acuracia_balanceada"],
+                           "dif_ic95_inferior": lo, "dif_ic95_superior": hi,
+                           "sensibilidade_com": com["sensibilidade"],
+                           "especificidade_com": com["especificidade"],
+                           "f1_com": com["f1_fim_de_vida"]})
+    res = pd.DataFrame(linhas)
+    p(f"  {'acuracia balanceada (%)':<32} {'sem':>6} {'com':>6} {'dif':>6}   IC 95% (celulas)")
+    for r in res.itertuples(index=False):
+        exclui = "exclui" if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0 else "inclui"
+        p(f"  {r.modelo:<22} {r.avaliacao:<9} {100 * r.sem:>6.1f} {100 * r.com:>6.1f} "
+          f"{100 * r.diferenca:>+6.1f}   [{100 * r.dif_ic95_inferior:+.1f}, "
+          f"{100 * r.dif_ic95_superior:+.1f}] {exclui} o zero")
+    prev = {f"previsto_{SLUG[n]}": preds["teste"][(n, "com")] for n in (MELHORADA, ENSEMBLE)}
+    return res, prev
+
+
 # ---------------------------------------------------------------------------
 # graficos
 # ---------------------------------------------------------------------------
@@ -1954,6 +2032,7 @@ def main():
     p("=" * 60)
     df = carregar(mods)
     conj = conjuntos(df)
+    conj_sem = conj
     tr = df[df.split == "treino"].reset_index(drop=True)
     te = df[df.split == "teste"].reset_index(drop=True)
     cod = None
@@ -1995,10 +2074,14 @@ def main():
           "e python src/grupos.py")
 
     p("")
-    melhorada = None
-    if a.com_grupo:
-        # Nelas o agrupamento nao e refeito a cada rodada: o grupo vazaria na validacao.
-        p("5 e 6. logistica melhorada e ensemble pulados: --com-grupo")
+    melhorada = ajustados = None
+    if a.com_grupo and refs:
+        p("5 e 6. logistica melhorada e ensemble, sem e com o grupo, na configuracao")
+        p("   da execucao sem o grupo (nada e reescolhido):")
+        ajustados, prev_aj = etapa_ajustados_com_grupo(mods, tr, te, conj_sem, cod)
+        prev = prev.assign(**prev_aj)
+    elif a.com_grupo:
+        p("5 e 6. logistica melhorada e ensemble pulados: --sem-referencias")
     elif refs:
         p("5. logistica melhorada, pos-hoc (C sai so da validacao):")
         melhorada = etapa_logistica(mods, tr, te, conj, a.tolerancia)
@@ -2015,6 +2098,8 @@ def main():
                 "teste_por_celula.csv": por, "predicoes_teste.csv": prev}
     if variante:
         arquivos["variante_mesmo_grupo.csv"] = variante[0]
+    if ajustados is not None:
+        arquivos["ajustados.csv"] = ajustados
     if melhorada:
         arquivos.update({"logistica_escolha_de_c.csv": melhorada[0],
                          "logistica_melhorada.csv": melhorada[2],

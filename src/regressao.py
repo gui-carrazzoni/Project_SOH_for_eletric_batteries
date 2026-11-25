@@ -147,8 +147,13 @@ indicadores — nos tres conjuntos de atributos. No GAM os indicadores entram
 como reta, como o protocolo. O agrupamento so ve as celulas de treino, e na
 validacao e refeito a cada rodada sem a celula deixada de fora
 (baterias_por_condicao.Codificacao); a particao aleatoria, que ja vaza por
-construcao, usa o de todas as celulas de treino. O ensemble nao roda: nele o
-agrupamento nao e refeito a cada rodada, e o grupo vazaria na validacao.
+construcao, usa o de todas as celulas de treino. O SVR ajustado, o Gradient
+Boosting monotonico e o ensemble rodam com a configuracao que ja sairam da
+execucao sem o grupo — o C do SVR, a composicao do ensemble e o lambda do GAM,
+lidos de saida_nasa/regressao/tabelas/ pelas mesmas regras de escolha — e nada e
+reajustado: cada um e avaliado sem e com o grupo, com o agrupamento refeito a
+cada rodada da validacao, em ajustados.csv. Por isso a execucao sem o grupo tem
+de vir antes.
 baterias_por_condicao.py poe os dois resultados lado a lado.
 
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
@@ -179,6 +184,8 @@ FIGURAS, TABELAS = SAIDA / "figuras", SAIDA / "tabelas"
 # --com-grupo troca a pasta de saida e acrescenta esta frase a todo subtitulo.
 GRUPO = "baterias_por_condicao"
 SAIDA_COM_GRUPO = RAIZ / "saida_nasa" / GRUPO / "regressao"
+# Onde --com-grupo le a configuracao do SVR ajustado e do ensemble.
+TABELAS_SEM_GRUPO = TABELAS
 NOTA_COM_GRUPO = (" Com baterias_por_condicao, o grupo de comportamento do módulo 2, entre os "
                   "atributos.")
 NOTA = ""
@@ -1221,6 +1228,87 @@ def etapa_ensemble(mods, tr, te, conj, lam, refs, previsoes_val, preds_te, rul, 
             "quais": quais}
 
 
+def config_ajustados(tolerancia):
+    """C do SVR, composicao do ensemble e lambda do GAM, da execucao sem o grupo.
+
+    Saem das tabelas que etapa_ensemble e etapa_lambda escreveram, pelas mesmas
+    regras de escolha. --com-grupo nao reescolhe nada disso: mede o efeito do
+    grupo sobre os modelos que ja foram escolhidos, e nao sobre outros.
+    """
+    import pandas as pd
+    arquivos = [TABELAS_SEM_GRUPO / n for n in ("ensemble_escolha_de_c.csv",
+                                                 "ensemble_composicao.csv", "comparacao.csv")]
+    for f in arquivos:
+        if not f.exists():
+            p(f"ERRO: {f.relative_to(RAIZ)} nao existe.")
+            p("    Rode antes, sem o grupo: python src/regressao.py")
+            sys.exit(1)
+    grade, comp, compar = (pd.read_csv(f) for f in arquivos)
+    c = float(grade.C[grade.rmse <= grade.rmse.min() * (1 + tolerancia)].min())
+    perto = comp[comp.rmse <= comp.rmse.min() * (1 + tolerancia)]
+    quais = perto.sort_values(["n", "rmse"]).membros.iloc[0].split(" + ")
+    lam = float(compar.query("modelo == 'GAM' and atributos == 'relativas' and "
+                             "validacao == 'uma celula de fora' and "
+                             "rotulos_no_treino == 'pares avaliaveis'")["lambda"].iloc[0])
+    return c, quais, lam
+
+
+def etapa_ajustados_com_grupo(mods, tr, te, conj, cod, tolerancia):
+    """--com-grupo: o SVR ajustado, o Gradient Boosting monotonico e o ensemble, sem e com o grupo.
+
+    `conj` e o conjunto sem o grupo. A configuracao vem de config_ajustados(); a
+    unica diferenca entre as duas versoes sao os indicadores do grupo. Na
+    validacao eles vem do agrupamento refeito sem a celula de fora (cod.rodada),
+    e a diferenca entre as versoes e pareada nas mesmas reamostragens de celulas.
+    """
+    np, pd = mods["numpy"], mods["pandas"]
+    from sklearn.base import clone
+    c, quais, lam = config_ajustados(tolerancia)
+    p(f"  configuracao da execucao sem o grupo: C do SVR = {c:g}; ensemble "
+      f"{' + '.join(quais)}" + (f" (GAM com lambda = {lam:g})" if "GAM" in quais else ""))
+    base = conj["relativas"]
+    y, cel, ok = tr[ALVO].to_numpy(float), tr.battery_id.to_numpy(), tr.avaliavel.to_numpy()
+    ok_te = te.avaliavel.to_numpy()
+    y_te, cel_te = te[ALVO].to_numpy(float)[ok_te], te.battery_id.to_numpy()[ok_te]
+
+    def modelos(cols):
+        membros = {"GAM": gam(lam, cols), SVR_AJUSTADO: svr(c), GB_MONO: gb_monotonico(cols)}
+        return {SVR_AJUSTADO: membros[SVR_AJUSTADO], GB_MONO: membros[GB_MONO],
+                ENSEMBLE: Media([membros[m] for m in quais])}
+
+    preds = {"validacao": {}, "teste": {}}
+    for versao, cols in (("sem", base), ("com", base + cod.colunas)):
+        rodada = cod.rodada(cols, cel) if versao == "com" else None
+        X = tr[cols].to_numpy(float)
+        for nome, m in modelos(cols).items():
+            preds["validacao"][(nome, versao)] = prever_fora(mods, m, X, y, cel, ok, ok,
+                                                             rodada)[ok]
+            preds["teste"][(nome, versao)] = clone(m).fit(X[ok], y[ok]).predict(
+                te[cols].to_numpy(float))[ok_te]
+
+    linhas = []
+    for alvo, (yy, cc) in {"validacao": (y[ok], cel[ok]), "teste": (y_te, cel_te)}.items():
+        am = reamostrar(mods, yy, preds[alvo], cc, lambda a, b: metricas(np, a, b)["rmse"])
+        for nome in modelos(base):
+            sem, com = (metricas(np, yy, preds[alvo][(nome, v)]) for v in ("sem", "com"))
+            lo, hi = np.percentile(am[(nome, "com")] - am[(nome, "sem")], [2.5, 97.5])
+            linhas.append({"modelo": nome, "avaliacao": alvo, "rmse_sem": sem["rmse"],
+                           "rmse_com": com["rmse"], "diferenca": com["rmse"] - sem["rmse"],
+                           "dif_ic95_inferior": lo, "dif_ic95_superior": hi,
+                           "mae_com": com["mae"], "vies_com": com["vies"], "r2_com": com["r2"]})
+    res = pd.DataFrame(linhas)
+    p(f"  {'RMSE (p.p.)':<42} {'sem':>6} {'com':>6} {'dif':>6}   IC 95% (celulas)")
+    for r in res.itertuples(index=False):
+        exclui = "exclui" if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0 else "inclui"
+        p(f"  {r.modelo:<30} {r.avaliacao:<11} {r.rmse_sem:>6.2f} {r.rmse_com:>6.2f} "
+          f"{r.diferenca:>+6.2f}   [{r.dif_ic95_inferior:+.2f}, {r.dif_ic95_superior:+.2f}] "
+          f"{exclui} o zero")
+    prev = {f"soh_{SLUG[n]}": clone(m).fit(tr.loc[ok, base + cod.colunas].to_numpy(float), y[ok])
+            .predict(te[base + cod.colunas].to_numpy(float))
+            for n, m in modelos(base + cod.colunas).items()}
+    return res, prev
+
+
 def efeitos_gam(mods, final, cols, tr):
     """f_j de cada atributo na unidade fisica dele, com o efeito tipico no treino.
 
@@ -2089,6 +2177,7 @@ def main():
     p("=" * 60)
     df = carregar(mods)
     conj = conjuntos(df)
+    conj_sem = conj
     tr = df[df.split == "treino"].reset_index(drop=True)
     te = df[df.split == "teste"].reset_index(drop=True)
     cod = None
@@ -2152,10 +2241,14 @@ def main():
         p(f"    {r.coluna:<26} {r.termo:<6} efeito tipico {r.efeito_tipico_pp:6.2f} p.p.{extra}")
 
     p("")
-    ens = None
-    if a.com_grupo:
-        # Nele o agrupamento nao e refeito a cada rodada: o grupo vazaria na validacao.
-        p("6. ensemble pulado: --com-grupo")
+    ens = ajustados = None
+    if a.com_grupo and refs:
+        p("6. SVR ajustado e ensemble, sem e com o grupo, na configuracao da execucao")
+        p("   sem o grupo (nada e reescolhido):")
+        ajustados, prev_aj = etapa_ajustados_com_grupo(mods, tr, te, conj_sem, cod, a.tolerancia)
+        prev = prev.assign(**prev_aj)
+    elif a.com_grupo:
+        p("6. ensemble pulado: --sem-referencias")
     elif refs:
         p("6. ensemble, pos-hoc (C do SVR e composicao so da validacao):")
         ens = etapa_ensemble(mods, tr, te, conj, lam, refs, previsoes, preds, rul, a.tolerancia)
@@ -2172,6 +2265,8 @@ def main():
                 "fins_de_vida.csv": rul["fins"], "rul_conversoes_validacao.csv": rul["conversoes"],
                 "rul_variante_media_movel.csv": rul["variante"],
                 "rul_resumo.csv": rul["resumo"], "rul_teste_por_par.csv": rul["por_par"]}
+    if ajustados is not None:
+        arquivos["ajustados.csv"] = ajustados
     if ens:
         arquivos.update({"ensemble_escolha_de_c.csv": ens["grade"],
                          "ensemble_composicao.csv": ens["composicao"],
