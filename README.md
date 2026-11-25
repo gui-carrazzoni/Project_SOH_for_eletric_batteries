@@ -929,6 +929,53 @@ entre 88% e 100% parecer velha. O custo fica em B0042 a 4 A / 4 °C, que passa d
 teste ser visto, e foram escolhidas na validação entre cerca de 300 combinações
 de modelo e atributos. O artigo que a usar tem de declarar isso.
 
+### Ensemble (pós-hoc)
+
+Um membro de cada família, todos com os atributos da logística melhorada: ela, o
+SVM e um **Gradient Boosting monotônico** — árvores rasas e o sinal físico
+imposto: mais idade e mais resistência só podem aumentar o escore de fim de vida,
+mais tensão só pode diminuir. Os hiperparâmetros do SVM (padrão) e do Gradient
+Boosting foram fixados, não ajustados. Roda como etapa à parte, e os resultados
+dos cinco algoritmos não mudam.
+
+**Voto majoritário, e não suave.** A forma de juntar e os membros saem da
+validação (`ensemble_composicao.csv`). No voto majoritário cada membro diz sim ou
+não e vence a maioria; no suave, a média dos escores, cada um dividido pelo seu
+desvio no treino. O escore do conjunto, para a AUC, é a mediana dos três: o sinal
+dela é o voto da maioria.
+
+| composição | voto | acurácia balanceada na validação | AUC |
+|---|---|---|---|
+| **logística + SVM + Gradient Boosting** | **majoritário** | **82,1%** | 0,891 |
+| logística + SVM + Gradient Boosting | suave | 80,8% | 0,893 |
+| logística + Gradient Boosting | suave | 80,7% | 0,880 |
+| logística + SVM | suave | 80,0% | 0,886 |
+| SVM + Gradient Boosting | suave | 79,8% | 0,886 |
+
+| acurácia balanceada | validação | teste | 33 células |
+|---|---|---|---|
+| **Ensemble** | **82,1%** | **88,4%** | 81,6% |
+| Regressão logística melhorada | 79,1% | 87,6% | 79,6% |
+| Gradient Boosting monotônico | 82,1% | 85,8% | 81,8% |
+| Regressão logística | 67,9% | 84,1% | 73,0% |
+| Gradient Boosting | 76,3% | 83,2% | 80,1% |
+| SVM (RBF), suavizado | 79,2% | 81,5% | 82,8% |
+| SVM (RBF) | 79,0% | 80,3% | 82,4% |
+| Random Forest | 73,6% | 76,8% | 78,3% |
+
+No teste o ensemble tem F1 de 0,874, AUC de 0,951, 59 fins de vida não detectados
+e 22 alarmes falsos. É o mais equilibrado, não o mais sensível: detecta 83% do fim
+de vida, contra 89% da logística melhorada e 91% da original.
+
+- **Ele não bate o melhor membro.** Empata com o Gradient Boosting monotônico na
+  validação e nas 33 células; o que ganha é no teste (+2,6 p.p., −1,0 a +5,1).
+- **Sobre a logística melhorada a diferença não é firme**: +0,9 p.p. no teste
+  (−2,2 a +5,7) e +1,9 nas 33 células (−1,4 a +5,5).
+- **Nas 33 células ele não se separa do SVM do artigo** (−0,8 p.p., −3,1 a +1,9);
+  separa-se da logística do artigo (+8,5, +2,6 a +14,5).
+- **O número do teste não é avaliação independente**, como o da logística
+  melhorada.
+
 **Cuidados:**
 
 - **Ajustar o kNN agora contamina o teste.** Peso por distância ou limiar de voto
@@ -957,9 +1004,12 @@ Em `saida_nasa/classificacao/tabelas/`:
 | `logistica_melhorada.csv` | cada troca da logística na validação, no teste e nas 33 células: métricas, matriz de confusão, IC e diferença pareada para a do artigo |
 | `logistica_coeficientes.csv` | os coeficientes da logística do artigo e da melhorada, com o mínimo e o máximo entre as 25 rodadas |
 | `logistica_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula de teste, antes e depois |
+| `ensemble_composicao.csv` | acurácia balanceada e AUC de cada composição e tipo de voto, só na validação |
+| `ensemble.csv` | o ensemble, os membros e as referências na validação, no teste e nas 33 células, com a diferença pareada do ensemble para cada um |
+| `ensemble_por_celula.csv` | a logística melhorada e o ensemble em cada célula de teste |
 | `teste.csv` | métricas no teste, com a matriz de confusão, IC por reamostragem de células de todas elas e diferença pareada para o kNN em acurácia balanceada, AUC e F1, com e sem Bonferroni |
 | `teste_por_celula.csv` | acertos, alarmes falsos e fins de vida não detectados por célula, de cada algoritmo |
-| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram, e a classe e o escore de cada referência e da logística melhorada |
+| `predicoes_teste.csv` | cada descarga de teste com a previsão, o voto e os três vizinhos que a decidiram, e a classe e o escore de cada referência, da logística melhorada e do ensemble |
 
 Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
 
@@ -975,7 +1025,8 @@ Em `saida_nasa/classificacao/figuras/`, na ordem do artigo:
 | `08_variante_mesmo_grupo.png` | a variante pós-hoc contra o modelo avaliado, em toda a grade de k |
 | `09_logistica_escolha_de_c.png` | a curva de C da logística, com os atributos do artigo e os da melhorada |
 | `10_logistica_melhorada.png` | cada troca da logística melhorada nas três avaliações, e a matriz de confusão do teste antes e depois |
-| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 07 de cada algoritmo e da logística melhorada, com os erros em cada célula de teste |
+| `11_ensemble.png` | o ensemble, os membros e as referências nas três avaliações, e a matriz de confusão do ensemble no teste |
+| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 07 de cada algoritmo, da logística melhorada e do ensemble, com os erros em cada célula de teste |
 
 ## `regressao.py`
 
@@ -1253,6 +1304,50 @@ classificação de fim de vida, com a mesma matriz de confusão da classificaç�
   viés positivo do SOH vira vida remanescente longa demais. Em B0034, de fim de
   vida artificial, todos erram de 56 a 100 ciclos.
 
+### Ensemble (pós-hoc)
+
+A média do SOH estimado por membros de famílias diferentes, com os mesmos
+atributos: o GAM, o SVR com C escolhido na validação e um **Gradient Boosting
+monotônico**, de árvores rasas e com o sinal físico imposto. Roda como etapa à
+parte, e os resultados dos cinco algoritmos não mudam.
+
+- **O C do SVR** sai da validação, pela regra do λ: o menor C a até 2% do menor
+  RMSE. Deu C = 10 (5,69 p.p., contra 6,29 do padrão, C = 1).
+- **Das árvores entra o Gradient Boosting monotônico, e não o Random Forest.** A
+  validação não separa os dois (5,05 contra 4,99), e o Random Forest é o que mais
+  decora as células: 1,83 na partição aleatória.
+- **A composição também sai da validação** (`ensemble_composicao.csv`): de todas
+  as combinações de dois ou três, vence a menor a até 2% do melhor RMSE. O GAM
+  fica de fora, porque piora o conjunto.
+
+| composição | RMSE na validação |
+|---|---|
+| **SVR ajustado + Gradient Boosting** | **4,99** |
+| GAM + SVR ajustado + Gradient Boosting | 5,29 |
+| GAM + Gradient Boosting | 5,42 |
+| GAM + SVR ajustado | 5,80 |
+
+| RMSE do SOH (p.p.) | validação | teste | todas (28 células) | fim de vida não percebido no teste (de 317) | RUL no teste (ciclos) |
+|---|---|---|---|---|---|
+| SVR ajustado | 5,69 | **5,71** | 5,61 | 68 | 19,2 |
+| **Ensemble** | **4,99** | 6,06 | **5,21** | 102 | 19,3 |
+| SVR (RBF) | 6,29 | 6,28 | 6,07 | 140 | **16,6** |
+| Gradient Boosting monotônico | 5,05 | 6,84 | 5,51 | 153 | 21,9 |
+| GAM | 6,49 | 6,88 | 6,58 | **39** | 17,1 |
+| Regressão linear | 11,67 | 7,29 | 7,99 | 40 | 18,4 |
+
+- **No teste, o SVR ajustado, que é membro dele, erra menos** (5,71 contra 6,06),
+  mas a diferença inclui o zero (+0,35 p.p., −0,43 a +0,96). Em todas as células,
+  uma de fora por vez, é o contrário, e exclui o zero (−0,40, −0,70 a −0,15).
+- **Contra o SVR e o GAM do artigo o ganho é firme em todas as células** (−0,87 e
+  −1,37 p.p., os dois intervalos excluem o zero); no teste, só contra o SVR
+  (−0,22, −0,44 a −0,04).
+- **O RUL não melhora.** SVR e GAM do artigo continuam os melhores no teste, em 4
+  pares; na validação, o ensemble erra 21,3 ciclos, contra 23,8 do SVR e 28,3 do
+  GAM.
+- **O número do teste não é avaliação independente**: o ensemble e o ajuste do C
+  vieram depois de o teste ser visto.
+
 Em `saida_nasa/regressao/tabelas/`:
 
 | | |
@@ -1262,7 +1357,7 @@ Em `saida_nasa/regressao/tabelas/`:
 | `validacao_por_par.csv` | erro de cada modelo em cada par de treino, quando a célula dele é a deixada de fora |
 | `teste.csv` | métricas no teste, IC por reamostragem de células (o do viés também), as quatro casas do limiar de 80% e diferença pareada para o GAM, com e sem Bonferroni |
 | `teste_por_par.csv` | RMSE e viés de cada modelo em cada par de teste, inclusive o que fica fora das métricas |
-| `predicoes_teste.csv` | cada descarga de teste com o SOH medido, as estimativas dos cinco modelos, o RUL real e o RUL de cada modelo e do oráculo |
+| `predicoes_teste.csv` | cada descarga de teste com o SOH medido, as estimativas dos cinco modelos, do ensemble e dos membros dele, o RUL real e o RUL de cada modelo, do ensemble e do oráculo |
 | `efeitos_gam.csv`, `efeitos_resumo.csv` | as funções do GAM final na unidade física, e o efeito típico de cada uma |
 | `taxas_por_condicao.csv` | a inclinação de Theil–Sen de cada par de treino e a taxa da condição |
 | `fins_de_vida.csv` | o ciclo do fim de vida de cada par avaliável, ou censurado |
@@ -1270,6 +1365,11 @@ Em `saida_nasa/regressao/tabelas/`:
 | `rul_variante_media_movel.csv` | a variante pós-hoc, média das últimas M estimativas antes de converter, só na validação |
 | `rul_resumo.csv` | o erro do RUL por fonte, na validação e no teste |
 | `rul_teste_por_par.csv` | o erro do RUL por par e algoritmo no teste, com o viés do SOH convertido em ciclos |
+| `ensemble_escolha_de_c.csv` | RMSE do SVR por C, na validação |
+| `ensemble_composicao.csv` | o erro de cada composição do ensemble, só na validação |
+| `ensemble.csv` | o ensemble, os membros e as referências na validação, no teste e em todas as células, com a diferença pareada do ensemble para cada um |
+| `ensemble_rul.csv` | o erro do RUL do ensemble, dos membros e das referências, na validação e no teste |
+| `ensemble_por_par.csv` | RMSE e viés do ensemble em cada par de teste |
 
 Em `saida_nasa/regressao/figuras/`, na ordem do artigo:
 
@@ -1284,7 +1384,8 @@ Em `saida_nasa/regressao/figuras/`, na ordem do artigo:
 | `07_efeitos_gam.png` | o que move o SOH segundo o GAM, atributo por atributo |
 | `08_rul_conversoes.png` | taxa da condição contra tendência da célula, por fração da vida |
 | `09_rul_teste_por_algoritmo.png` | o RUL de cada algoritmo nos pares de teste que chegam a 80%, com o oráculo |
-| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 06 de cada algoritmo, com o SOH medido e o estimado em cada par de teste |
+| `10_ensemble.png` | o RMSE do ensemble, dos membros e das referências nas três avaliações, e o SOH estimado pelo ensemble e pelo SVR ajustado no teste |
+| `teste_por_modelo/` | `<algoritmo>_por_celula.png`: a 06 de cada algoritmo e do ensemble, com o SOH medido e o estimado em cada par de teste |
 
 
 ## O que os dados exigem cuidado

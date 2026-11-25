@@ -122,8 +122,22 @@ a lado, e nao so o GAM.
 **Onde fica cada coisa.** As tabelas vao para saida_nasa/regressao/tabelas/ e
 os graficos para saida_nasa/regressao/figuras/, numerados na ordem do artigo:
 validacao (01 e 02), teste de todos os algoritmos (03 a 05), o GAM em detalhe
-(06 e 07) e o RUL (08 e 09). As imagens por algoritmo ficam em
+(06 e 07), o RUL (08 e 09) e o ensemble (10). As imagens por algoritmo ficam em
 figuras/teste_por_modelo/.
+
+**Ensemble (pos-hoc).** A media do SOH estimado por membros de familias
+diferentes, com os mesmos atributos: o GAM, o SVR com C escolhido na validacao e
+um Gradient Boosting monotonico, de arvores rasas e com o sinal fisico imposto —
+mais idade e mais resistencia so podem baixar o SOH, mais tensao so pode subir.
+Das arvores, entra ele e nao o Random Forest: a validacao nao separa os dois
+(a diferenca fica dentro de TOLERANCIA_LAMBDA), e o Random Forest e o que mais
+decora as celulas, com RMSE de 1,8 na particao aleatoria e 5,0 por celula. Que
+membros ficam tambem sai da validacao: todas as combinacoes de dois ou tres, e
+vence a menor a ate TOLERANCIA_LAMBDA do melhor RMSE, em
+ensemble_composicao.csv. O C do SVR segue a mesma regra, o menor C equivalente
+ao melhor; o Gradient Boosting foi fixado, nao ajustado. A ideia veio depois de o
+teste ser visto, entao o numero do teste nao e avaliacao independente, e ela
+roda a parte, sem entrar nas tabelas e nos graficos dos cinco algoritmos.
 
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
@@ -177,10 +191,15 @@ COR_CONJUNTO = {"relativas": (PAL[0], "D"), "brutas": (PAL[7], "o"),
                 "todas": (PAL[6], "s")}
 # No terminal e nos CSV os nomes ficam sem acento, como no resto do projeto; o
 # acento volta so nos graficos, que vao para o artigo.
-ROTULO_MODELO = {"Regressao linear": "Regressão linear"}
+ROTULO_MODELO = {"Regressao linear": "Regressão linear",
+                 "Gradient Boosting monotonico": "Gradient Boosting monotônico"}
 SLUG = {"GAM": "gam", "Regressao linear": "regressao_linear", "SVR (RBF)": "svr",
         "Random Forest": "random_forest", "Processo gaussiano": "processo_gaussiano",
-        "oraculo": "oraculo"}
+        "oraculo": "oraculo", "Ensemble": "ensemble",
+        "SVR (RBF), C ajustado": "svr_ajustado",
+        "Gradient Boosting monotonico": "gb_monotonico"}
+SVR_AJUSTADO, GB_MONO = "SVR (RBF), C ajustado", "Gradient Boosting monotonico"
+ENSEMBLE = "Ensemble"
 # Apelido no terminal, onde a tabela por par tem uma coluna por modelo.
 CURTO = {"GAM": "GAM", "Regressao linear": "linear", "SVR (RBF)": "SVR",
          "Random Forest": "RF", "Processo gaussiano": "GPR"}
@@ -211,6 +230,14 @@ MEDIAS_POS_HOC = [3, 5, 10]        # media movel antes de converter: so a varian
 HORIZONTE = 200            # ciclos, o tamanho do maior par; previsao sem fim a vista conta isso
 ALFA_RUL = 0.2             # cone de +-20% em torno do RUL real
 FAIXAS_VIDA = [0.0, 0.25, 0.5, 0.75, 1.0]
+GRADE_C_SVR = [1.0, 3.0, 10.0, 30.0, 100.0, 300.0]
+# O sinal fisico de cada atributo no SOH, imposto ao Gradient Boosting do
+# ensemble; o que nao esta aqui fica livre.
+SINAL_SOH = {"ciclo_par": -1, "re_rel": -1, "rct_rel": -1, "rectified_impedance_rel": -1,
+             "voltage_load_rel": 1, "voltage_measured_rel": 1}
+# Arvores rasas, folhas grandes e passo curto: fixados, nao ajustados.
+GB_RASO = dict(learning_rate=0.05, max_iter=200, max_leaf_nodes=8, min_samples_leaf=40,
+               l2_regularization=5.0)
 FOLDS_ALEATORIOS = 5       # particao vazada, so para medir o vazamento
 N_BOOT = 2000              # reamostragens de celulas para o intervalo do teste
 SEMENTE = 0
@@ -364,6 +391,35 @@ def gam(lam, colunas):
     from sklearn.pipeline import make_pipeline
     lineares = tuple(i for i, c in enumerate(colunas) if c in LINEARES)
     return make_pipeline(preparo(), GAM(lam=lam, lineares=lineares))
+
+
+class Media(BaseEstimator, RegressorMixin):
+    """A media do SOH estimado por varios regressores."""
+
+    def __init__(self, membros=()):
+        self.membros = membros
+
+    def fit(self, X, y):
+        from sklearn.base import clone
+        self.ajustados_ = [clone(m).fit(X, y) for m in self.membros]
+        return self
+
+    def predict(self, X):
+        import numpy as np
+        return np.mean([m.predict(X) for m in self.ajustados_], axis=0)
+
+
+def svr(c):
+    from sklearn.pipeline import make_pipeline
+    from sklearn.svm import SVR
+    return make_pipeline(preparo(), SVR(C=c))
+
+
+def gb_monotonico(colunas):
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    from sklearn.pipeline import make_pipeline
+    return make_pipeline(preparo(), HistGradientBoostingRegressor(
+        monotonic_cst=[SINAL_SOH.get(c, 0) for c in colunas], random_state=SEMENTE, **GB_RASO))
 
 
 def referencias():
@@ -1002,6 +1058,140 @@ def etapa_rul(mods, tr, te, previsoes_val, preds_te):
             "instantes_teste": inst_te, "por_par": por_par}
 
 
+def etapa_ensemble(mods, tr, te, conj, lam, refs, previsoes_val, preds_te, rul, tolerancia):
+    """Pos-hoc: o ensemble, com o C do SVR e a composicao escolhidos na validacao.
+
+    Os membros, o ensemble e as referencias saem na validacao, no teste e — menos
+    o processo gaussiano, que levaria minutos — em todas as celulas avaliaveis,
+    treino e teste juntos, com uma de fora por vez. O RUL usa a conversao que a
+    etapa 4 escolheu.
+    """
+    np, pd = mods["numpy"], mods["pandas"]
+    from itertools import combinations
+    from sklearn.base import clone
+    cols = conj["relativas"]
+    X, y = tr[cols].to_numpy(float), tr[ALVO].to_numpy(float)
+    cel, ok = tr.battery_id.to_numpy(), tr.avaliavel.to_numpy()
+    fora = lambda m: prever_fora(mods, m, X, y, cel, ok, ok)
+    rmse = lambda pr: metricas(np, y[ok], pr[ok])["rmse"]
+
+    grade = pd.Series({c: rmse(fora(svr(c))) for c in GRADE_C_SVR}, name="rmse")
+    grade.index.name = "C"
+    c = float(min(grade.index[grade <= grade.min() * (1 + tolerancia)]))
+    p("  SVR, RMSE por C: " + ", ".join(f"{k:g}: {v:.3f}" + (" *" if k == c else "")
+                                        for k, v in grade.items()))
+    p(f"  * o menor C a ate {100 * tolerancia:.0f}% do menor RMSE")
+
+    membros = {"GAM": gam(lam, cols), SVR_AJUSTADO: svr(c), GB_MONO: gb_monotonico(cols)}
+    val = {"GAM": previsoes_val["GAM"], SVR_AJUSTADO: fora(membros[SVR_AJUSTADO]),
+           GB_MONO: fora(membros[GB_MONO])}
+    linhas = []
+    for n in (2, 3):
+        for q in combinations(membros, n):
+            pr = np.mean([val[m] for m in q], axis=0)
+            linhas.append({"membros": " + ".join(q), "n": n,
+                           **metricas(np, y[ok], pr[ok]), "quais": q})
+    comp = pd.DataFrame(linhas).sort_values("rmse", ignore_index=True)
+    perto = comp[comp.rmse <= comp.rmse.min() * (1 + tolerancia)]
+    quais = perto.sort_values(["n", "rmse"]).quais.iloc[0]
+    p(f"  {'composicao, so na validacao':<66} {'RMSE':>6} {'MAE':>6} {'vies':>6}")
+    for r in comp.itertuples(index=False):
+        p(f"  {r.membros:<66} {r.rmse:>6.2f} {r.mae:>6.2f} {r.vies:>+6.2f}"
+          + (" *" if r.quais == quais else ""))
+    ensemble = Media([membros[m] for m in quais])
+    val[ENSEMBLE] = np.mean([val[m] for m in quais], axis=0)
+
+    ajuste = lambda m, d: clone(m).fit(X[ok], y[ok]).predict(d[cols].to_numpy(float))
+    novos = {SVR_AJUSTADO: membros[SVR_AJUSTADO], GB_MONO: membros[GB_MONO], ENSEMBLE: ensemble}
+    val = {**previsoes_val, **{m: val[m] for m in novos}}
+    teste = {**preds_te, **{n: ajuste(m, te) for n, m in novos.items()}}
+    tudo = pd.concat([tr, te], ignore_index=True)
+    y_tudo, cel_tudo = tudo[ALVO].to_numpy(float), tudo.battery_id.to_numpy()
+    ok_tudo, X_tudo = tudo.avaliavel.to_numpy(), tudo[cols].to_numpy(float)
+    modelos_tudo = {"GAM": membros["GAM"],
+               **{n: m for n, m in refs.items() if n != "Processo gaussiano"}, **novos}
+    previsoes_tudo = {n: prever_fora(mods, m, X_tudo, y_tudo, cel_tudo, ok_tudo, ok_tudo)
+                   for n, m in modelos_tudo.items()}
+
+    ok_te = te.avaliavel.to_numpy()
+    alvos = {"validacao": (y[ok], cel[ok], {n: v[ok] for n, v in val.items()}),
+             "teste": (te[ALVO].to_numpy(float)[ok_te], te.battery_id.to_numpy()[ok_te],
+                       {n: v[ok_te] for n, v in teste.items()}),
+             "todas as celulas": (y_tudo[ok_tudo], cel_tudo[ok_tudo],
+                            {n: v[ok_tudo] for n, v in previsoes_tudo.items()})}
+    linhas = []
+    for alvo, (yy, cc, prs) in alvos.items():
+        am = reamostrar(mods, yy, prs, cc, lambda a, b: metricas(np, a, b)["rmse"])
+        base = metricas(np, yy, prs[ENSEMBLE])["rmse"]
+        for nome, pr in prs.items():
+            real, est = yy < FIM_DE_VIDA, pr < FIM_DE_VIDA
+            lin = {"modelo": nome, "avaliacao": alvo, **metricas(np, yy, pr),
+                   "fim_de_vida_detectado": int((real & est).sum()),
+                   "fim_de_vida_nao_percebido": int((real & ~est).sum()),
+                   "alarme_falso": int((~real & est).sum()),
+                   "saudavel_reconhecida": int((~real & ~est).sum())}
+            lin["ic95_inferior"], lin["ic95_superior"] = np.percentile(am[nome], [2.5, 97.5])
+            # Negativa: o ensemble erra menos que o modelo.
+            lin["ensemble_menos_modelo"] = base - lin["rmse"]
+            lin["dif_ic95_inferior"], lin["dif_ic95_superior"] = np.percentile(
+                am[ENSEMBLE] - am[nome], [2.5, 97.5])
+            linhas.append(lin)
+    res = pd.DataFrame(linhas)
+
+    # RUL pela conversao escolhida, na validacao com a taxa sem a celula.
+    incl, tx, conv = rul["inclinacoes"], rul["taxas"], rul["escolhida"]
+    fins = {s: g.drop(columns="split") for s, g in rul["fins"].groupby("split")}
+    rotas = (("validacao", tr, fins["treino"], val,
+              lambda b, cd: float(taxas(incl, excluir=b).get(cd, np.nan))),
+             ("teste", te, fins["teste"], teste, lambda b, cd: float(tx.get(cd, np.nan))))
+    rul_res, inst_te = [], None
+    for alvo, d, f, est, taxa in rotas:
+        inst = instantes(mods, d, f, {"oraculo": d[ALVO].to_numpy(float), **est}, taxa, conv)
+        rul_res.append(resumir_rul(mods, inst).assign(conjunto=alvo))
+        inst_te = inst
+    rul_res = pd.concat(rul_res, ignore_index=True)
+    mae = rul_res.pivot(index="fonte", columns="conjunto", values="mae_ciclos")
+
+    piv = res.pivot(index="modelo", columns="avaliacao", values="rmse")
+    t = res[res.avaliacao == "teste"].set_index("modelo")
+    ordem = list(t.sort_values("rmse").index)
+    p("")
+    p(f"  {'':<30} {'RMSE':>32} | {'teste':>29} | {'RUL MAE (ciclos)':>18}")
+    p(f"  {'':<30} {'validacao':>10} {'teste':>10} {'todas':>10} | {'MAE':>6} {'R2':>6} "
+      f"{'vies':>6} {'n.perc.':>8} | {'validacao':>9} {'teste':>8}")
+    for m in ordem:
+        v_tudo = piv.loc[m, "todas as celulas"]
+        p(f"  {m:<30} {piv.loc[m, 'validacao']:>10.2f} {piv.loc[m, 'teste']:>10.2f} "
+          + (f"{v_tudo:>10.2f}" if v_tudo == v_tudo else f"{'-':>10}")
+          + f" | {t.mae[m]:>6.2f} {t.r2[m]:>6.2f} {t.vies[m]:>+6.2f} "
+          f"{t.fim_de_vida_nao_percebido[m]:>8} | {mae.loc[m, 'validacao']:>9.1f} "
+          f"{mae.loc[m, 'teste']:>8.1f}")
+    p(f"  todas: as {len(np.unique(cel_tudo[ok_tudo]))} celulas com par avaliavel, uma de fora "
+      "por vez")
+    p(f"  oraculo (SOH medido): RUL MAE {mae.loc['oraculo', 'validacao']:.1f} na validacao e "
+      f"{mae.loc['oraculo', 'teste']:.1f} no teste")
+    for alvo in ("teste", "todas as celulas"):
+        p(f"  RMSE do ensemble menos o de cada modelo, {alvo}, pareada por celulas:")
+        for r in res[(res.avaliacao == alvo) & (res.modelo != ENSEMBLE)].itertuples(index=False):
+            exclui = "exclui" if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0 else "inclui"
+            p(f"    {r.modelo:<30} {r.ensemble_menos_modelo:+.2f} p.p. IC 95% "
+              f"[{r.dif_ic95_inferior:+.2f}, {r.dif_ic95_superior:+.2f}] {exclui} o zero")
+
+    prev = {f"soh_{SLUG[m]}": teste[m] for m in novos}
+    e = te[["battery_id", "test_condition", "avaliavel"]].assign(
+        erro=teste[ENSEMBLE] - te[ALVO].to_numpy(float))
+    g = e.groupby(["battery_id", "test_condition"], sort=False)
+    por = g.agg(avaliavel=("avaliavel", "first"), descargas=("erro", "size"),
+                vies=("erro", "mean")).reset_index()
+    por["rmse"] = g.erro.apply(lambda v: float(np.sqrt(np.mean(v ** 2)))).to_numpy()
+    r = inst_te[inst_te.fonte == ENSEMBLE][["battery_id", "test_condition", "ciclo",
+                                            "rul_previsto"]]
+    return {"grade": grade.to_frame(), "composicao": comp.drop(columns="quais"), "res": res,
+            "rul": rul_res, "por": por, "prev": prev,
+            "rul_teste": r.rename(columns={"rul_previsto": f"rul_{SLUG[ENSEMBLE]}"}),
+            "quais": quais}
+
+
 def efeitos_gam(mods, final, cols, tr):
     """f_j de cada atributo na unidade fisica dele, com o efeito tipico no treino.
 
@@ -1391,6 +1581,92 @@ def fig_conversoes(mods, plt, conv_val, escolhida):
            f"{vence}.")
     titulo_figura(plt, fig, "Converter pela condição ou pela tendência da célula", sub)
     salvar(plt, fig, "08_rul_conversoes.png")
+
+
+def fig_ensemble(mods, plt, ens, prev):
+    """O RMSE do ensemble, dos membros e das referencias, e o ensemble e o SVR no teste."""
+    np = mods["numpy"]
+    res = ens["res"]
+    piv = res.pivot(index="modelo", columns="avaliacao", values="rmse")
+    t = res[res.avaliacao == "teste"].set_index("modelo")
+    ordem = list(t.sort_values("rmse").index)
+    ys = np.arange(len(ordem))[::-1]
+    fig, axes = plt.subplots(1, 3, figsize=(14, 0.62 * len(ordem) + 3.0),
+                             gridspec_kw={"width_ratios": [1.9, 1, 1]})
+    ax = axes[0]
+    # Os tres valores de varios modelos quase se tocam: vao escritos sob o nome.
+    marcas = (("validacao", "validação (20 células)",
+               dict(marker="o", markersize=8, markerfacecolor=SURF, markeredgecolor=INK2,
+                    markeredgewidth=1.6)),
+              ("todas as celulas", "todas as células",
+               dict(marker="s", markersize=8, markerfacecolor=PAL[1], markeredgecolor=SURF,
+                    markeredgewidth=1.4)),
+              ("teste", "teste (8 células)",
+               dict(marker="D", markersize=8.5, markerfacecolor=PAL[0], markeredgecolor=SURF,
+                    markeredgewidth=1.4)))
+    for alvo, rotulo, marca in marcas:
+        ax.plot(piv.loc[ordem, alvo].to_numpy(float), ys, linestyle="", zorder=3, label=rotulo,
+                **marca)
+    valor = lambda v: virg(v, 2) if v == v else "—"
+    ax.set_yticks(ys, [ROTULO_MODELO.get(m, m) + "\n" + " · ".join(
+        valor(piv.loc[m, alvo]) for alvo, *_ in marcas) for m in ordem], fontsize=9.5)
+    for tk, m in zip(ax.get_yticklabels(), ordem):
+        if m == ENSEMBLE:
+            tk.set_fontweight("bold")
+            tk.set_color(INK)
+    ax.set_ylim(-0.5, len(ordem) - 0.4)
+    ax.set_xlim(4, 12.5)
+    ax.set_xlabel("RMSE do SOH (p.p.)")
+    ax.grid(axis="y", visible=False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.legend(fontsize=9, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3,
+              borderaxespad=0.4, handletextpad=0.2, columnspacing=1.2)
+    a = prev[prev.avaliavel]
+    x = a[ALVO].to_numpy(float)
+    lo, hi = 55, 103
+    for ax, m, coluna in zip(axes[1:], (ENSEMBLE, SVR_AJUSTADO), ("soh_ensemble", "soh_svr_ajustado")):
+        doente, sadio = (lo, FIM_DE_VIDA), (FIM_DE_VIDA, hi)
+        for a0, b0 in ((doente, sadio), (sadio, doente)):
+            ax.fill_between(a0, *b0, color=PAL[1], alpha=0.09, linewidth=0, zorder=0)
+        ax.plot([lo, hi], [lo, hi], color=INK2, linestyle="--", linewidth=1.1, zorder=1)
+        ax.scatter(x, np.clip(a[coluna], lo, hi), s=9, color=PAL[0], alpha=0.45, linewidths=0,
+                   zorder=2)
+        ax.text(lo + 1.5, hi - 1.2, f"não percebido\n{t.fim_de_vida_nao_percebido[m]}",
+                fontsize=8.5, color=INK2, va="top")
+        ax.text(hi - 1.2, lo + 1.2, f"alarme falso\n{t.alarme_falso[m]}", fontsize=8.5,
+                color=INK2, va="bottom", ha="right")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+        ax.set_aspect("equal")
+        ax.set_title(f"{m}, no teste\nRMSE {virg(t.rmse[m], 2)} p.p.", loc="left", fontsize=10.5,
+                     color=INK)
+        ax.set_xlabel("SOH medido (%)")
+    axes[1].set_ylabel("SOH estimado (%)")
+    d = res.set_index(["modelo", "avaliacao"])
+    ic = lambda m, av: (f"{sinal(d.ensemble_menos_modelo[(m, av)], 2)}\u00a0p.p. "
+                        f"({sinal(d.dif_ic95_inferior[(m, av)], 2)} a "
+                        f"{sinal(d.dif_ic95_superior[(m, av)], 2)})")
+    sub = (f"Média de {lista([ROTULO_MODELO.get(m, m) for m in ens['quais']])}; a composição e o "
+           "C do SVR saíram da validação. Sob cada nome, o RMSE na validação, em todas as células "
+           "e no teste; nos dois primeiros, uma célula fica de fora por vez. Diferença de RMSE do "
+           "ensemble, pareada por células, em todas as células e no teste: para o SVR do artigo, "
+           f"{ic('SVR (RBF)', 'todas as celulas')} e {ic('SVR (RBF)', 'teste')}; para o GAM, "
+           f"{ic('GAM', 'todas as celulas')} e {ic('GAM', 'teste')}; para o SVR ajustado, "
+           f"{ic(SVR_AJUSTADO, 'todas as celulas')} e {ic(SVR_AJUSTADO, 'teste')}. O ensemble veio "
+           "depois de o teste ser visto: o número do teste não é avaliação independente.")
+    titulo_figura(plt, fig, "O ensemble, os membros e as referências", sub)
+    salvar(plt, fig, "10_ensemble.png")
+
+    erro = ens["por"].set_index(["battery_id", "test_condition"])
+    limites = {par: _limite_soh(list(g[ALVO]) + list(g.soh_ensemble) + [FIM_DE_VIDA])
+               for par, g in a.groupby(["battery_id", "test_condition"])}
+    fig = _grade_celulas(plt, a, "soh_ensemble", erro, limites, "SOH estimado pelo ensemble")
+    sub = ("Cada painel é um par célula × condição de teste, com o ensemble ajustado nas 20 "
+           "células de treino. O viés é a média de estimado menos medido: positivo, o ensemble "
+           "vê a célula mais saudável do que ela está.")
+    titulo_figura(plt, fig, "Ensemble: SOH em cada célula de teste", sub)
+    salvar(plt, fig, "teste_por_modelo/ensemble_por_celula.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1821,6 +2097,16 @@ def main():
                  if r.termo == "reta" else "")
         p(f"    {r.coluna:<26} {r.termo:<6} efeito tipico {r.efeito_tipico_pp:6.2f} p.p.{extra}")
 
+    p("")
+    ens = None
+    if refs:
+        p("6. ensemble, pos-hoc (C do SVR e composicao so da validacao):")
+        ens = etapa_ensemble(mods, tr, te, conj, lam, refs, previsoes, preds, rul, a.tolerancia)
+        prev = prev.assign(**ens["prev"]).merge(
+            ens["rul_teste"], on=["battery_id", "test_condition", "ciclo"], how="left")
+    else:
+        p("6. ensemble pulado: --sem-referencias")
+
     arquivos = {"escolha_de_lambda.csv": tab, "comparacao.csv": comp,
                 "validacao_por_par.csv": val_par, "teste.csv": res, "teste_por_par.csv": por,
                 "predicoes_teste.csv": prev, "efeitos_gam.csv": curvas,
@@ -1829,9 +2115,15 @@ def main():
                 "fins_de_vida.csv": rul["fins"], "rul_conversoes_validacao.csv": rul["conversoes"],
                 "rul_variante_media_movel.csv": rul["variante"],
                 "rul_resumo.csv": rul["resumo"], "rul_teste_por_par.csv": rul["por_par"]}
+    if ens:
+        arquivos.update({"ensemble_escolha_de_c.csv": ens["grade"],
+                         "ensemble_composicao.csv": ens["composicao"],
+                         "ensemble.csv": ens["res"], "ensemble_rul.csv": ens["rul"],
+                         "ensemble_por_par.csv": ens["por"]})
     p("")
     for nome, tabela in arquivos.items():
-        tabela.round(4).to_csv(TABELAS / nome, index=nome == "escolha_de_lambda.csv")
+        tabela.round(4).to_csv(TABELAS / nome, index=nome in ("escolha_de_lambda.csv",
+                                                              "ensemble_escolha_de_c.csv"))
         p(f"  {(TABELAS / nome).relative_to(RAIZ)}")
 
     if not a.sem_graficos:
@@ -1839,8 +2131,8 @@ def main():
         p("graficos:")
         plt = estilo(mods)
         # Na ordem do artigo: validacao, teste de todos os algoritmos, o GAM em
-        # detalhe e o RUL. Sem referencias, os graficos por algoritmo saem so
-        # com o GAM.
+        # detalhe, o RUL e o ensemble. Sem referencias, os graficos por algoritmo
+        # saem so com o GAM.
         ordem = ordem_modelos(piv)
         fig_escolha_lambda(mods, plt, tab, lam, a.tolerancia)
         if refs:
@@ -1853,6 +2145,8 @@ def main():
         fig_efeitos(mods, plt, curvas, efeitos, rug)
         fig_conversoes(mods, plt, rul["conversoes"], rul["escolhida"])
         fig_rul_todos(mods, plt, inst, rul["resumo"], ordem, lam)
+        if ens:
+            fig_ensemble(mods, plt, ens, prev)
     p("")
     p(f"  tempo total: {time.time() - t0:.0f}s")
 

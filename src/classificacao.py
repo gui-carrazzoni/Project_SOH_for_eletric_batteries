@@ -93,8 +93,9 @@ discutir os cinco lado a lado, e nao so o kNN.
 **Onde fica cada coisa.** As tabelas vao para saida_nasa/classificacao/tabelas/
 e os graficos para saida_nasa/classificacao/figuras/, numerados na ordem do
 artigo: validacao (01 e 02), teste de todos os algoritmos (03 a 06), os erros do
-kNN ao longo dos ciclos (07), a variante pos-hoc (08) e a logistica melhorada
-(09 e 10). As imagens por algoritmo ficam em figuras/teste_por_modelo/.
+kNN ao longo dos ciclos (07), a variante pos-hoc (08), a logistica melhorada
+(09 e 10) e o ensemble (11). As imagens por algoritmo ficam em
+figuras/teste_por_modelo/.
 
 **Variante pos-hoc: vizinhos so do mesmo grupo de comportamento.** Na analise
 dos erros do teste, mais da metade dos vizinhos que enganaram B0018 vinha de
@@ -118,6 +119,18 @@ ela roda a parte e nao entra nas tabelas e nos graficos dos cinco algoritmos. A
 avaliacao nas 33 celulas, uma de fora por vez, mostra o quanto o resultado
 depende das 8 sorteadas para o teste.
 
+**Ensemble (pos-hoc).** Um membro de cada familia, todos com os atributos da
+logistica melhorada: ela, o SVM e um Gradient Boosting monotonico, de arvores
+rasas e com o sinal fisico imposto — mais idade e mais resistencia so podem
+aumentar o escore de fim de vida, mais tensao so pode diminuir. O sinal imposto
+impede as arvores de aprender a curva particular de uma celula, que e o que elas
+fazem com 25 celulas e ciclos vizinhos quase iguais. Os hiperparametros do
+Gradient Boosting e do SVM foram fixados, nao ajustados. Duas formas de juntar:
+voto majoritario (cada membro diz sim ou nao) e voto suave (a media dos escores,
+cada um dividido pelo seu desvio no treino). A forma e os membros saem da
+validacao, em ensemble_composicao.csv. Como a logistica melhorada, veio depois
+de o teste ser visto e roda a parte.
+
 Dependencias: numpy, pandas, scipy, scikit-learn, matplotlib
 """
 from __future__ import annotations
@@ -126,6 +139,11 @@ import argparse
 import sys
 import time
 from pathlib import Path
+
+try:
+    from sklearn.base import BaseEstimator, ClassifierMixin
+except ImportError:            # checar() avisa e sai antes de qualquer ajuste
+    BaseEstimator = ClassifierMixin = object
 
 # A raiz do projeto e a pasta acima de src/: e la que ficam
 # cleaned_nasa_dataset/ e saida_nasa/.
@@ -169,15 +187,20 @@ COR_CONJUNTO = {"relativas": (PAL[0], "D"), "brutas": (PAL[7], "o"),
 # No terminal e nos CSV os nomes ficam sem acento, como no resto do projeto; o
 # acento volta so nos graficos, que vao para o artigo.
 ROTULO_MODELO = {"Regressao logistica": "Regressão logística",
-                 "Regressao logistica melhorada": "Regressão logística melhorada"}
+                 "Regressao logistica melhorada": "Regressão logística melhorada",
+                 "Gradient Boosting monotonico": "Gradient Boosting monotônico",
+                 "SVM (RBF), suavizado": "SVM (RBF), suavizado"}
 # Apelido no terminal, onde a tabela por celula tem uma coluna por modelo, e
 # nome das colunas de cada referencia em predicoes_teste.csv.
 CURTO = {"Regressao logistica": "logistica", "SVM (RBF)": "SVM",
          "Random Forest": "RF", "Gradient Boosting": "GB"}
 SLUG = {"Regressao logistica": "regressao_logistica", "SVM (RBF)": "svm",
         "Random Forest": "random_forest", "Gradient Boosting": "gradient_boosting",
-        "Regressao logistica melhorada": "regressao_logistica_melhorada"}
+        "Regressao logistica melhorada": "regressao_logistica_melhorada",
+        "Ensemble": "ensemble"}
 LOGISTICA, MELHORADA = "Regressao logistica", "Regressao logistica melhorada"
+SVM_SUAVE, GB_MONO = "SVM (RBF), suavizado", "Gradient Boosting monotonico"
+ENSEMBLE = "Ensemble"
 # Rampa sequencial do erro: o laranja que marca os erros nos outros graficos, do
 # quase-nada ao escuro, com a luminosidade (OKLCH) caindo a cada passo.
 SEQ_ERRO = ["#f0efec", "#f7d9c9", "#f4b394", "#ef8c5f", "#eb6834", "#bf4a1b", "#86300c"]
@@ -191,6 +214,13 @@ GRADE_C = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.3, C_PADRAO, 3.0, 10.0]
 # Media movel exponencial da logistica melhorada: alfa = 2 / (JANELA_MEDIA + 1).
 # E a janela da referencia de inicio de vida de normalizar.py; nao foi ajustada.
 JANELA_MEDIA = 5
+# O sinal fisico de cada sinal no escore de fim de vida, imposto ao Gradient
+# Boosting do ensemble; o que nao esta aqui fica livre.
+SINAL_FIM_DE_VIDA = {"ciclo_par": 1, "re_rel": 1, "rct_rel": 1, "rectified_impedance_rel": 1,
+                     "voltage_load_rel": -1, "voltage_measured_rel": -1}
+# Arvores rasas, folhas grandes e passo curto: fixados, nao ajustados.
+GB_RASO = dict(learning_rate=0.05, max_iter=200, max_leaf_nodes=8, min_samples_leaf=40,
+               l2_regularization=5.0)
 FOLDS_ALEATORIOS = 5       # particao vazada, so para medir o vazamento
 N_BOOT = 2000              # reamostragens de celulas para o intervalo do teste
 PERTO_DO_LIMIAR = 5.0      # p.p. de SOH; erro a essa distancia de 80% e fronteira
@@ -346,6 +376,55 @@ def referencias():
         "Gradient Boosting": make_pipeline(
             preparo(), HistGradientBoostingClassifier(random_state=SEMENTE)),
     }
+
+
+class Voto(BaseEstimator, ClassifierMixin):
+    """Varios classificadores e uma decisao so.
+
+    O escore de cada membro e a funcao de decisao dele dividida pelo desvio dela
+    no treino, para as escalas se compararem; zero separa as classes em todos.
+    No voto suave o escore do conjunto e a media; no majoritario, a mediana, que
+    com um numero impar de membros tem o sinal da maioria — a decisao e o voto, e
+    a AUC ainda tem um escore continuo para ordenar.
+    """
+
+    def __init__(self, membros=(), tipo="majoritario"):
+        self.membros = membros
+        self.tipo = tipo
+
+    def fit(self, X, y):
+        import numpy as np
+        from sklearn.base import clone
+        self.classes_ = np.array([0, 1])
+        self.ajustados_ = [clone(m).fit(X, y) for m in self.membros]
+        self.escalas_ = [float(m.decision_function(X).std()) for m in self.ajustados_]
+        return self
+
+    def decision_function(self, X):
+        import numpy as np
+        z = np.column_stack([m.decision_function(X) / e
+                             for m, e in zip(self.ajustados_, self.escalas_)])
+        return juntar(np, z, self.tipo)
+
+    def predict(self, X):
+        return (self.decision_function(X) > 0).astype(int)
+
+
+def juntar(np, z, tipo):
+    """Escores dos membros, um por coluna -> o escore do conjunto."""
+    return np.median(z, axis=1) if tipo == "majoritario" else z.mean(axis=1)
+
+
+def membros_ensemble(colunas, c):
+    """Um membro por familia: linear, nucleo e arvores."""
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.pipeline import make_pipeline
+    from sklearn.svm import SVC
+    sinais = [SINAL_FIM_DE_VIDA.get(x.removesuffix("_suave"), 0) for x in colunas]
+    return {MELHORADA: logistica(c),
+            SVM_SUAVE: make_pipeline(preparo(), SVC()),
+            GB_MONO: make_pipeline(preparo(), HistGradientBoostingClassifier(
+                monotonic_cst=sinais, random_state=SEMENTE, **GB_RASO))}
 
 
 def acuracia_balanceada(np, y, pred):
@@ -880,6 +959,25 @@ def etapa_variante(mods, tr, conj, tab, k_base, tolerancia):
     return curva, acerto, resumo
 
 
+def por_celula(te, preds):
+    """Acertos, alarmes falsos e fins de vida perdidos de cada modelo em cada par de teste."""
+    import pandas as pd
+    y = te.fim_de_vida.to_numpy()
+    partes = []
+    for modelo, pr in preds.items():
+        t = (te[["battery_id", "test_condition", "fim_de_vida"]]
+             .assign(acerto=pr == y, alarme_falso=(pr == 1) & (y == 0),
+                     nao_detectado=(pr == 0) & (y == 1))
+             .groupby(["battery_id", "test_condition"])
+             .agg(descargas=("acerto", "size"), fim_de_vida_real=("fim_de_vida", "sum"),
+                  acuracia=("acerto", "mean"), alarmes_falsos=("alarme_falso", "sum"),
+                  nao_detectados=("nao_detectado", "sum"))
+             .reset_index())
+        t.insert(0, "modelo", modelo)
+        partes.append(t)
+    return pd.concat(partes, ignore_index=True)
+
+
 def escolher_c(serie, tolerancia):
     """O menor C (mais regularizado) a ate `tolerancia` do maximo, a regra do k."""
     return float(serie.index[serie >= serie.max() - tolerancia].min())
@@ -969,26 +1067,115 @@ def etapa_logistica(mods, tr, te, conj, tolerancia):
 
     prev = {f"previsto_{SLUG[MELHORADA]}": preds["teste"]["media movel"],
             f"escore_{SLUG[MELHORADA]}": escores["teste"]["media movel"]}
-    por = []
-    for nome, modelo in (("artigo", LOGISTICA), ("media movel", MELHORADA)):
-        pr = preds["teste"][nome]
-        t = (te[["battery_id", "test_condition", "fim_de_vida"]]
-             .assign(acerto=pr == y_te, alarme_falso=(pr == 1) & (y_te == 0),
-                     nao_detectado=(pr == 0) & (y_te == 1))
-             .groupby(["battery_id", "test_condition"])
-             .agg(descargas=("acerto", "size"), fim_de_vida_real=("fim_de_vida", "sum"),
-                  acuracia=("acerto", "mean"), alarmes_falsos=("alarme_falso", "sum"),
-                  nao_detectados=("nao_detectado", "sum"))
-             .reset_index())
-        t.insert(0, "modelo", modelo)
-        por.append(t)
-    por = pd.concat(por, ignore_index=True)
+    por = por_celula(te, {LOGISTICA: preds["teste"]["artigo"],
+                          MELHORADA: preds["teste"]["media movel"]})
     p("")
     p("  acerto por celula de teste, artigo -> melhorada:")
     ac = por.pivot(index=["battery_id", "test_condition"], columns="modelo", values="acuracia")
     for (b, cond), r in ac.iterrows():
         p(f"    {b} {cond:<11} {r[LOGISTICA]:>5.0%} -> {r[MELHORADA]:>4.0%}")
     return tab, c_final, res, pd.concat(coefs, ignore_index=True), por, prev
+
+
+def etapa_ensemble(mods, tr, te, conj, c, refs):
+    """Pos-hoc: o ensemble, com a composicao e o tipo de voto escolhidos na validacao.
+
+    `c` e o da logistica melhorada. Os membros, o ensemble e as referencias do
+    artigo saem na validacao, no teste e nas 33 celulas com uma de fora por vez;
+    a diferenca para a logistica melhorada e pareada nas mesmas reamostragens.
+    """
+    np, pd = mods["numpy"], mods["pandas"]
+    from itertools import combinations
+    from sklearn.base import clone
+    y_tr, y_te = tr.fim_de_vida.to_numpy(), te.fim_de_vida.to_numpy()
+    cel_tr, cel_te = tr.battery_id.to_numpy(), te.battery_id.to_numpy()
+    suaves = passos_logistica(conj, c)[-1][1]
+    membros = membros_ensemble(suaves, c)
+
+    # Os escores dos membros fora da celula, ja na escala do treino da rodada.
+    X = tr[suaves].to_numpy()
+    z = np.zeros((len(y_tr), len(membros)))
+    for b in np.unique(cel_tr):
+        fora = cel_tr == b
+        for j, m in enumerate(membros.values()):
+            m = clone(m).fit(X[~fora], y_tr[~fora])
+            z[fora, j] = m.decision_function(X[fora]) / m.decision_function(X[~fora]).std()
+    nomes, linhas = list(membros), []
+    for n in (2, 3):
+        for q in combinations(range(len(nomes)), n):
+            # O voto majoritario de dois empata; so o de tres decide.
+            for tipo in ("suave", "majoritario") if n % 2 else ("suave",):
+                s = juntar(np, z[:, list(q)], tipo)
+                linhas.append({"membros": " + ".join(nomes[j] for j in q), "voto": tipo,
+                               "acuracia_balanceada": acuracia_balanceada(
+                                   np, y_tr, (s > 0).astype(int)),
+                               "auc": auc(np, y_tr, s), "quais": q})
+    comp = pd.DataFrame(linhas).sort_values("acuracia_balanceada", ascending=False,
+                                            ignore_index=True)
+    tipo, quais = comp.voto[0], comp.quais[0]
+    p(f"  {'composicao, so na validacao':<84} {'voto':<12} {'acur.bal':>8} {'AUC':>6}")
+    for i, r in comp.iterrows():
+        p(f"  {r.membros:<84} {r.voto:<12} {r.acuracia_balanceada:>8.3f} {r.auc:>6.3f}"
+          + (" *" if i == 0 else ""))
+
+    escolhidos = [nomes[j] for j in quais]
+    ensemble = Voto([membros[n] for n in escolhidos], tipo)
+    rel = conj["relativas"]
+    modelos = {**{n: (m, rel) for n, m in refs.items()},
+               **{n: (m, suaves) for n, m in membros.items()}, ENSEMBLE: (ensemble, suaves)}
+    tudo = pd.concat([tr, te], ignore_index=True)
+    alvos = {"validacao": (y_tr, cel_tr), "teste": (y_te, cel_te),
+             "33 celulas": (tudo.fim_de_vida.to_numpy(), tudo.battery_id.to_numpy())}
+    preds, escores = {a: {} for a in alvos}, {a: {} for a in alvos}
+    for nome, (m, cols) in modelos.items():
+        for alvo, d in (("validacao", tr), ("33 celulas", tudo)):
+            preds[alvo][nome], escores[alvo][nome] = prever_fora(
+                mods, m, d[cols].to_numpy(), *alvos[alvo])
+        final = clone(m).fit(tr[cols].to_numpy(), y_tr)
+        preds["teste"][nome] = final.predict(te[cols].to_numpy())
+        escores["teste"][nome] = pontuar(final, te[cols].to_numpy())
+
+    linhas = []
+    for alvo, (y, cel) in alvos.items():
+        amostras = reamostrar(mods, y, preds[alvo], cel)
+        base = acuracia_balanceada(np, y, preds[alvo][MELHORADA])
+        for nome in modelos:
+            m = metricas(np, y, preds[alvo][nome])
+            lin = {"modelo": nome, "avaliacao": alvo, **m,
+                   "auc": auc(np, y, escores[alvo][nome])}
+            lin["ic95_inferior"], lin["ic95_superior"] = np.percentile(
+                amostras[nome], [2.5, 97.5])
+            # Do ensemble para cada modelo: positiva, o ensemble acerta mais.
+            lin["ensemble_menos_modelo"] = (
+                acuracia_balanceada(np, y, preds[alvo][ENSEMBLE]) - m["acuracia_balanceada"])
+            lin["dif_ic95_inferior"], lin["dif_ic95_superior"] = np.percentile(
+                amostras[ENSEMBLE] - amostras[nome], [2.5, 97.5])
+            linhas.append(lin)
+    res = pd.DataFrame(linhas)
+
+    piv = res.pivot(index="modelo", columns="avaliacao", values="acuracia_balanceada")
+    p("")
+    p(f"  {'acuracia balanceada':<30} " + " ".join(f"{a:>11}" for a in alvos))
+    for nome in modelos:
+        p(f"  {nome:<30} " + " ".join(f"{piv.loc[nome, a]:>11.3f}" for a in alvos))
+    p("  33 celulas: treino e teste juntos, uma celula de fora por vez")
+    p("")
+    for r in res[res.modelo == ENSEMBLE].itertuples(index=False):
+        p(f"  ensemble, {r.avaliacao:<11} sensib. {r.sensibilidade:.3f}, especif. "
+          f"{r.especificidade:.3f}, F1 {r.f1_fim_de_vida:.3f}, AUC {r.auc:.3f}, "
+          f"{r.fn} nao detectado(s), {r.fp} alarme(s) falso(s)")
+    for alvo in ("teste", "33 celulas"):
+        p(f"  ensemble menos cada modelo, {alvo}, pareada por celulas:")
+        for r in res[(res.avaliacao == alvo) & (res.modelo != ENSEMBLE)].itertuples(index=False):
+            exclui = "exclui" if r.dif_ic95_inferior > 0 or r.dif_ic95_superior < 0 else "inclui"
+            p(f"    {r.modelo:<30} {100 * r.ensemble_menos_modelo:+.1f} p.p. IC 95% "
+              f"[{100 * r.dif_ic95_inferior:+.1f}, {100 * r.dif_ic95_superior:+.1f}] "
+              f"{exclui} o zero")
+
+    por = por_celula(te, {n: preds["teste"][n] for n in (MELHORADA, ENSEMBLE)})
+    prev = {f"previsto_{SLUG[ENSEMBLE]}": preds["teste"][ENSEMBLE],
+            f"escore_{SLUG[ENSEMBLE]}": escores["teste"][ENSEMBLE]}
+    return comp.drop(columns="quais"), res, por, prev, tipo, escolhidos
 
 
 # ---------------------------------------------------------------------------
@@ -1360,17 +1547,9 @@ def fig_escolha_c(mods, plt, tab, c_final):
     salvar(plt, fig, "09_logistica_escolha_de_c.png")
 
 
-def fig_logistica(mods, plt, res):
-    """Cada troca nas tres avaliacoes, e a matriz de confusao do teste antes e depois."""
-    np = mods["numpy"]
-    from matplotlib.colors import LinearSegmentedColormap
-    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
-    piv = res.pivot(index="passo", columns="avaliacao", values="acuracia_balanceada")
-    passos = list(ROTULO_PASSO)
-    ys = np.arange(len(passos))[::-1]
-    fig, axes = plt.subplots(1, 3, figsize=(13, 5.6),
-                             gridspec_kw={"width_ratios": [2.1, 1, 1]})
-    ax = axes[0]
+def _tres_avaliacoes(np, ax, piv, rotulos, limites, ligar=False):
+    """Uma linha por modelo (ou passo) e um marcador por avaliacao, com o valor escrito."""
+    ys = np.arange(len(piv))[::-1]
     # O rotulo da validacao vai embaixo do marcador: o das 33 celulas fica colado nele.
     marcas = (("validacao", "validação (25 células)", -0.17, "top",
                dict(marker="o", markersize=8, markerfacecolor=SURF, markeredgecolor=INK2,
@@ -1382,20 +1561,34 @@ def fig_logistica(mods, plt, res):
                dict(marker="D", markersize=8.5, markerfacecolor=PAL[0], markeredgecolor=SURF,
                     markeredgewidth=1.4)))
     for alvo, rotulo, dy, va, marca in marcas:
-        v = 100 * piv.loc[passos, alvo].to_numpy()
-        ax.plot(v, ys, linestyle="-", color=GRID, linewidth=1.6, zorder=1)
+        v = 100 * piv[alvo].to_numpy()
+        if ligar:
+            ax.plot(v, ys, linestyle="-", color=GRID, linewidth=1.6, zorder=1)
         ax.plot(v, ys, linestyle="", zorder=3, label=rotulo, **marca)
         for x, y in zip(v, ys):
             ax.text(x, y + dy, virg(x), fontsize=9, color=INK2, ha="center", va=va)
-    ax.set_yticks(ys, [ROTULO_PASSO[n] for n in passos])
-    ax.set_ylim(-0.5, len(passos) - 0.4)
-    ax.set_xlim(65, 91)
+    ax.set_yticks(ys, rotulos)
+    ax.set_ylim(-0.5, len(piv) - 0.4)
+    ax.set_xlim(*limites)
     ax.set_xlabel("acurácia balanceada (%)")
     ax.grid(axis="y", visible=False)
     ax.spines["left"].set_visible(False)
     ax.tick_params(axis="y", length=0)
     ax.legend(fontsize=9, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3,
               borderaxespad=0.4, handletextpad=0.2, columnspacing=1.2)
+
+
+def fig_logistica(mods, plt, res):
+    """Cada troca nas tres avaliacoes, e a matriz de confusao do teste antes e depois."""
+    np = mods["numpy"]
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
+    piv = res.pivot(index="passo", columns="avaliacao", values="acuracia_balanceada")
+    passos = list(ROTULO_PASSO)
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5.6),
+                             gridspec_kw={"width_ratios": [2.1, 1, 1]})
+    _tres_avaliacoes(np, axes[0], piv.loc[passos], [ROTULO_PASSO[n] for n in passos],
+                     (65, 91), ligar=True)
 
     t = res[res.avaliacao == "teste"].set_index("passo")
     for j, (nome, titulo) in enumerate((("artigo", "a do artigo, no teste"),
@@ -1416,13 +1609,48 @@ def fig_logistica(mods, plt, res):
     salvar(plt, fig, "10_logistica_melhorada.png")
 
 
-def fig_celulas_logistica(mods, plt, prev):
-    acerto = (prev[f"previsto_{SLUG[MELHORADA]}"] == prev.fim_de_vida).to_numpy()
+def fig_celulas_pos_hoc(mods, plt, prev, nome, descricao):
+    acerto = (prev[f"previsto_{SLUG[nome]}"] == prev.fim_de_vida).to_numpy()
     fig = _grade_celulas(plt, prev, acerto, "classificada errado")
-    sub = ("Cada painel é uma célula de teste numa condição de ensaio, com a logística melhorada "
-           "ajustada nas 25 células de treino. " + _frase_erros(prev, acerto))
-    titulo_figura(plt, fig, f"{ROTULO_MODELO[MELHORADA]}: erros em cada célula de teste", sub)
-    salvar(plt, fig, f"teste_por_modelo/{SLUG[MELHORADA]}_por_celula.png")
+    sub = (f"Cada painel é uma célula de teste numa condição de ensaio, com {descricao} "
+           "nas 25 células de treino. " + _frase_erros(prev, acerto))
+    titulo_figura(plt, fig, f"{ROTULO_MODELO.get(nome, nome)}: erros em cada célula de teste", sub)
+    salvar(plt, fig, f"teste_por_modelo/{SLUG[nome]}_por_celula.png")
+
+
+def fig_ensemble(mods, plt, res, tipo, escolhidos):
+    """O ensemble, os membros e as referencias, e a matriz do ensemble no teste."""
+    np = mods["numpy"]
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("seq", SEQ)
+    piv = res.pivot(index="modelo", columns="avaliacao", values="acuracia_balanceada")
+    ordem = list(res[res.avaliacao == "teste"].sort_values("acuracia_balanceada",
+                                                           ascending=False).modelo)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 0.62 * len(ordem) + 3.2),
+                             gridspec_kw={"width_ratios": [2.6, 1]})
+    _tres_avaliacoes(np, axes[0], piv.loc[ordem], [ROTULO_MODELO.get(n, n) for n in ordem],
+                     (65, 91))
+    for tk in axes[0].get_yticklabels():
+        if tk.get_text() == ENSEMBLE:
+            tk.set_fontweight("bold")
+            tk.set_color(INK)
+    r = res[(res.modelo == ENSEMBLE) & (res.avaliacao == "teste")].iloc[0]
+    _matriz(np, axes[1], r, cmap, True)
+    axes[1].set_title("o ensemble, no teste", fontsize=11, color=INK, pad=10)
+    d = res.set_index(["modelo", "avaliacao"])
+    ic = lambda m, a: (f"{sinal(100 * d.ensemble_menos_modelo[(m, a)])}\u00a0p.p. "
+                       f"({sinal(100 * d.dif_ic95_inferior[(m, a)])} a "
+                       f"{sinal(100 * d.dif_ic95_superior[(m, a)])})")
+    voto = "majoritário" if tipo == "majoritario" else "suave"
+    rot = [ROTULO_MODELO.get(n, n) for n in escolhidos]
+    sub = (f"Voto {voto} de {lista(rot)}; a composição e o tipo de voto saíram da validação. Na "
+           "validação e nas 33 células, uma célula fica de fora por vez. Diferença do ensemble, "
+           f"pareada por células: para a logística melhorada, {ic(MELHORADA, '33 celulas')} nas "
+           f"33 células e {ic(MELHORADA, 'teste')} no teste; para o SVM do artigo, "
+           f"{ic('SVM (RBF)', '33 celulas')} nas 33 células. O ensemble veio depois de o teste "
+           "ser visto: o número do teste não é avaliação independente.")
+    titulo_figura(plt, fig, "O ensemble, os membros e as referências", sub)
+    salvar(plt, fig, "11_ensemble.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1725,8 +1953,12 @@ def main():
         p("5. logistica melhorada, pos-hoc (C sai so da validacao):")
         melhorada = etapa_logistica(mods, tr, te, conj, a.tolerancia)
         prev = prev.assign(**melhorada[5])
+        p("")
+        p("6. ensemble, pos-hoc (composicao e tipo de voto so da validacao):")
+        ensemble = etapa_ensemble(mods, tr, te, conj, melhorada[1], refs)
+        prev = prev.assign(**ensemble[3])
     else:
-        p("5. logistica melhorada pulada: --sem-referencias")
+        p("5 e 6. logistica melhorada e ensemble pulados: --sem-referencias")
 
     arquivos = {"escolha_de_k.csv": tab, "comparacao.csv": comp,
                 "validacao_por_celula.csv": por_cel, "teste.csv": res,
@@ -1737,7 +1969,9 @@ def main():
         arquivos.update({"logistica_escolha_de_c.csv": melhorada[0],
                          "logistica_melhorada.csv": melhorada[2],
                          "logistica_coeficientes.csv": melhorada[3],
-                         "logistica_por_celula.csv": melhorada[4]})
+                         "logistica_por_celula.csv": melhorada[4],
+                         "ensemble_composicao.csv": ensemble[0], "ensemble.csv": ensemble[1],
+                         "ensemble_por_celula.csv": ensemble[2]})
     p("")
     for nome, tabela in arquivos.items():
         tabela.round(4).to_csv(TABELAS / nome, index=nome in ("escolha_de_k.csv",
@@ -1750,8 +1984,8 @@ def main():
         p("graficos:")
         plt = estilo(mods)
         # Na ordem do artigo: validacao, teste de todos os algoritmos, o kNN em
-        # detalhe, a variante pos-hoc e a logistica melhorada. Sem referencias, os
-        # graficos por algoritmo saem so com o kNN.
+        # detalhe, a variante pos-hoc, a logistica melhorada e o ensemble. Sem
+        # referencias, os graficos por algoritmo saem so com o kNN.
         ordem = ordem_modelos(piv, nome_knn)
         fig_escolha_k(mods, plt, tab, k, a.tolerancia)
         fig_hierarquia(mods, plt, piv, nome_knn)
@@ -1766,7 +2000,9 @@ def main():
         if melhorada:
             fig_escolha_c(mods, plt, melhorada[0], melhorada[1])
             fig_logistica(mods, plt, melhorada[2])
-            fig_celulas_logistica(mods, plt, prev)
+            fig_celulas_pos_hoc(mods, plt, prev, MELHORADA, "a logística melhorada ajustada")
+            fig_ensemble(mods, plt, ensemble[1], ensemble[4], ensemble[5])
+            fig_celulas_pos_hoc(mods, plt, prev, ENSEMBLE, "o ensemble ajustado")
     p("")
     p(f"  tempo total: {time.time() - t0:.0f}s")
 
